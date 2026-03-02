@@ -1,0 +1,144 @@
+You are a Call of Cthulhu scenario writer. Given raw scenario atoms, synthesize a UNIQUE, complete adventure script a Keeper can run immediately.
+
+THEMES: {themes}
+ERA/SETTING CONSTRAINT: {era_context}
+STRICTLY ENFORCE THIS SETTING. No 1920s tropes unless era explicitly states it.
+LANGUAGE: {language}
+NAMING CONVENTION: All proper nouns (people, places, artifacts) must be Lovecraftian or Anglo-Saxon. No Slavic or regional names.
+
+--- RAW SCENARIO ATOMS ---
+{atoms}
+--------------------------
+
+Remix and recombine atoms into a fresh scenario. Do NOT copy verbatim. Invent connecting tissue.
+
+OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
+{{
+  "title": "Short evocative scenario title",
+  "era_and_setting": "Specific time and place (1-2 sentences)",
+  "atmosphere_notes": "Dominant sensory/emotional tone for the Keeper (1 sentence)",
+  "inciting_hook": "What draws investigators in — the surface-level call to action (1-2 sentences)",
+  "core_mystery": "The central secret investigators uncover at the end (1-2 sentences)",
+  "hidden_threat": "The Mythos entity or force at work, its goal, and its method (2-3 sentences)",
+  "truth_the_players_never_suspect": "The single biggest twist — something that recontextualizes everything once revealed (1-2 sentences)",
+
+  "acts": [
+    {{
+      "act": 1,
+      "title": "Act title",
+      "summary": "What happens in this act — the investigators' situation and objective (2-3 sentences)",
+      "scenes": [
+        {{
+          "scene": "Scene name",
+          "location": "Location name",
+          "trigger": "What causes investigators to come here or this scene to begin",
+          "description": "What the investigators experience when they arrive — sights, sounds, mood (2-3 sentences)",
+          "what_happens": "The key event, encounter, or discovery in this scene (2-3 sentences)",
+          "clues_available": ["Clue title 1", "Clue title 2"],
+          "npc_present": ["NPC name"],
+          "threat_level": "none|tension|danger|combat",
+          "keeper_notes": "Behind-the-scenes guidance — what the Keeper should emphasize or hide (1-2 sentences)"
+        }}
+      ]
+    }},
+    {{
+      "act": 2,
+      "title": "Act title",
+      "summary": "Rising tension — investigators dig deeper, things get worse (2-3 sentences)",
+      "scenes": [
+        {{
+          "scene": "Scene name",
+          "location": "Location name",
+          "trigger": "What triggers this scene",
+          "description": "Atmospheric arrival description",
+          "what_happens": "Key event or discovery",
+          "clues_available": [],
+          "npc_present": [],
+          "threat_level": "tension|danger",
+          "keeper_notes": "Keeper guidance"
+        }}
+      ]
+    }},
+    {{
+      "act": 3,
+      "title": "Climax act title",
+      "summary": "Confrontation with the true threat — all threads converge (2-3 sentences)",
+      "scenes": [
+        {{
+          "scene": "Final confrontation scene name",
+          "location": "Lair or climax location",
+          "trigger": "What forces investigators here",
+          "description": "The horror of what they find",
+          "what_happens": "How the climax plays out — what investigators must do to succeed or survive",
+          "clues_available": [],
+          "npc_present": [],
+          "threat_level": "danger|combat",
+          "keeper_notes": "Win/lose conditions, escape routes, what happens if they fail"
+        }}
+      ]
+    }}
+  ],
+
+  "locations": [
+    {{"name": "Location name", "description": "1-2 sentence description", "tags": "entry|danger|clue|lair", "first_impressions": "What investigators notice immediately", "hidden": "What is concealed here that requires investigation to find"}}
+  ],
+
+  "npcs": [
+    {{
+      "name": "Anglo-Saxon name",
+      "role": "ally|neutral|enemy|hidden_enemy",
+      "description": "Who they appear to be (1 sentence)",
+      "secret": "What they truly are or hide (1 sentence)",
+      "motivation": "What they want and why (1 sentence)",
+      "when_encountered": "Which act/scene they appear in",
+      "behavior_if_pressured": "How they react under interrogation or threat (1 sentence)"
+    }}
+  ],
+
+  "clues": [
+    {{
+      "title": "Clue name",
+      "content": "What investigators find and its surface meaning (1 sentence)",
+      "true_meaning": "What it actually implies — the deeper truth (1 sentence)",
+      "location": "Location name where found",
+      "leads_to": "Scene or location this clue points toward",
+      "skill_to_find": "Skill name required, or 'none' if visible"
+    }}
+  ],
+
+  "clue_chain": [
+    "Clue title 1 → Clue title 2 → Revelation title → Core mystery revealed"
+  ],
+
+  "twists": [
+    {{
+      "name": "Twist name",
+      "timing": "act_1|act_2|act_3|climax",
+      "description": "What is revealed and how it changes the situation (2 sentences)",
+      "investigator_impact": "How this should affect the players emotionally or strategically"
+    }}
+  ],
+
+  "sanity_moments": [
+    {{
+      "trigger": "What investigators witness or learn",
+      "san_loss": "1d3|1d6|1d8|1d10",
+      "description": "The specific horror that causes the loss (1 sentence)"
+    }}
+  ],
+
+  "plot_threads": [
+    {{
+      "name": "Thread name",
+      "stakes": "What happens if investigators fail or ignore this thread (1 sentence)",
+      "steps": 4,
+      "failure_consequence": "Concrete in-world consequence of failure (1 sentence)"
+    }}
+  ],
+
+  "endings": {{
+    "success": "What the world looks like if investigators succeed (2 sentences)",
+    "partial": "What happens if they stop the immediate threat but miss the deeper truth (1 sentence)",
+    "failure": "What unfolds if investigators fail or die (2 sentences)"
+  }}
+}}

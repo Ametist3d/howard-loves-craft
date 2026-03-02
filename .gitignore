@@ -1,0 +1,23 @@
+_bckp/
+.venv/
+__pycache__/
+node_modules/
+sessions/
+~/.cache/huggingface/
+.cache/
+
+# Python
+*.pyc
+*.pyo
+.env
+*.env.local
+
+# Databases & ChromaDB
+backend/data/coc_rules_db/
+backend/data/coc_scenario_db/
+*.db
+*.sqlite3
+
+# Logs
+*.log
+logs/

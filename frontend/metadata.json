@@ -1,0 +1,5 @@
+{
+  "name": "Call of Cthulhu: Keeper AI",
+  "description": "An AI-powered Call of Cthulhu 7th Edition RPG helper. Features character generation, story narration, image visualization, and integrated dice rolling mechanics.",
+  "requestFramePermissions": []
+}
