@@ -48,10 +48,15 @@ export const ChatInterface: React.FC<Props> = ({ messages, isLoading }) => {
                 : 'bg-[#1a1510] text-gray-300 border-r-4 border-cthulhu-blood font-serif leading-relaxed w-full'
             }`}>
             {msg.sender === MessageSender.KEEPER && <div className="text-xs text-cthulhu-blood font-bold uppercase mb-1 tracking-widest">Keeper</div>}
+            {msg.imageGenerating && !msg.image && (
+              <div className="mb-3 text-xs text-gray-500 font-mono animate-pulse tracking-widest">
+                ⬡ GENERATING SCENE...
+              </div>
+            )}
             {msg.image && (
-               <div className="mb-3 rounded overflow-hidden border border-cthulhu-700 relative group">
-                  <img src={msg.image} alt="Visualization" className="w-full h-auto object-cover animate-fade-in" />
-               </div>
+              <div className="mb-3 rounded overflow-hidden border border-cthulhu-700">
+                <img src={msg.image} alt="Visualization" className="w-full h-auto object-cover animate-fade-in" />
+              </div>
             )}
             <div className="prose prose-invert prose-p:mb-2 max-w-none break-words whitespace-normal text-sm md:text-base">
                <ReactMarkdown>{msg.content}</ReactMarkdown>

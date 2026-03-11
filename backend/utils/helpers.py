@@ -51,17 +51,45 @@ def extract_json(text: str) -> dict:
 
 def get_chat_history(db: SessionDB, limit: int = 10) -> str:
     events = db.list_events(limit=limit * 2)
-    chat_lines = []
+    pairs = []
     for e in reversed(events):
         if e.get("event_type") == "CHAT":
             payload = e.get("payload", {})
             role = payload.get("role", "Unknown")
             content = payload.get("content", "")
-            
-            # Truncate Keeper messages — model must not use them as a copy template.
-            # Show only the last 80 chars as a context anchor, not the full narrative.
-            if role.lower() == "keeper" and len(content) > 120:
-                content = "...[предыдущая сцена]... " + content[-80:].strip()
-            
-            chat_lines.append(f"{role.upper()}: {content}")
+            pairs.append((role, content))
+
+    chat_lines = []
+    for i, (role, content) in enumerate(pairs):
+        if role.lower() == "keeper":
+            # Keeper messages are ALWAYS summarised — never full.
+            # Full text is a copy-template that Gemma will parrot.
+            if len(content) > 150:
+                # Keep only the LAST sentence as a context anchor
+                last_sentence = content.rstrip().rsplit(".", 1)[-1].strip()
+                if not last_sentence or len(last_sentence) < 10:
+                    last_sentence = content[-120:].strip()
+                content = f"[...сцена описана ранее...] {last_sentence}"
+            chat_lines.append(f"KEEPER: {content}")
+        else:
+            # Player messages stay full — they're short actions
+            chat_lines.append(f"USER: {content}")
+
     return "\n\n".join(chat_lines)
+
+# def get_chat_history(db: SessionDB, limit: int = 10) -> str:
+#     events = db.list_events(limit=limit * 2)
+#     chat_lines = []
+#     for e in reversed(events):
+#         if e.get("event_type") == "CHAT":
+#             payload = e.get("payload", {})
+#             role = payload.get("role", "Unknown")
+#             content = payload.get("content", "")
+            
+#             # Truncate Keeper messages — model must not use them as a copy template.
+#             # Show only the last 80 chars as a context anchor, not the full narrative.
+#             if role.lower() == "keeper" and len(content) > 300:
+#                 content = "...[предыдущая сцена]... " + content[-100:].strip()
+            
+#             chat_lines.append(f"{role.upper()}: {content}")
+#     return "\n\n".join(chat_lines)

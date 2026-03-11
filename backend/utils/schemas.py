@@ -6,6 +6,13 @@ class CharGenRequest(BaseModel):
     language: str
     era_context: Optional[str] = None
 
+class ChatResponse(BaseModel):
+    narrative: str
+    suggested_actions: List[str] = []
+    state_updates: Optional[Dict[str, Any]] = None
+    image_url: Optional[str] = None
+    generation_id: Optional[str] = None 
+
 class StartSessionRequest(BaseModel):
     investigators: List[Dict[str, Any]]
     scenarioType: str
@@ -21,3 +28,10 @@ class ChatRequest(BaseModel):
     rag_enabled: bool = True
     top_k: int = 2
     temperature: float = 0.7
+    num_ctx: int = 16384 
+
+class AvatarRequest(BaseModel):
+    physical_description: str
+    name: str
+    occupation: str
+    era_context: Optional[str] = None

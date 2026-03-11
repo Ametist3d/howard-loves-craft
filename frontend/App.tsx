@@ -17,7 +17,8 @@ const INITIAL_STATE: GameState = {
   settings: {
     ragEnabled: true,
     topK: 2,
-    temperature: 0.7
+    temperature: 0.7,
+    numCtx: 16384 
   }
 };
 
@@ -82,10 +83,29 @@ function App() {
   }, []);
 
   const processAiResponse = async (response: ChatResponse) => {
-    addMessage(MessageSender.KEEPER, response.narrative);
+    const msgId = Date.now().toString() + Math.random();
+
+    // 1. Show narrative immediately
+    setMessages((prev) => [...prev, {
+      id: msgId,
+      sender: MessageSender.KEEPER,
+      content: response.narrative,
+      timestamp: Date.now(),
+      image: undefined,
+      imageGenerating: !!response.generation_id,  // ← drives the spinner
+    }]);
+
     setSuggestedActions(response.suggested_actions || []);
-    if (response.state_updates) {
-      handleStateUpdate(response.state_updates);
+    if (response.state_updates) handleStateUpdate(response.state_updates);
+
+    // 2. Poll for image in background — doesn't block anything
+    if (response.generation_id) {
+      const imageUrl = await apiService.pollImageStatus(response.generation_id);
+      setMessages((prev) => prev.map((m) =>
+        m.id === msgId
+          ? { ...m, image: imageUrl || undefined, imageGenerating: false }
+          : m
+      ));
     }
   };
 
@@ -151,6 +171,25 @@ function App() {
 
       setGameState(prev => ({ ...prev, phase: 'playing' }));
       await processAiResponse(result);
+      
+      // Generate avatars in background — fires after game starts, patches in as ready
+      generatedInvestigators.forEach(async (inv) => {
+        if (!inv.physical_description) return;
+        const avatarUrl = await apiService.generateAvatar(
+          inv.name,
+          inv.occupation,
+          inv.physical_description,
+          eraContext
+        );
+        if (avatarUrl) {
+          setGameState(prev => ({
+            ...prev,
+            investigators: prev.investigators.map(i =>
+              i.name === inv.name ? { ...i, avatarUrl } : i
+            )
+          }));
+        }
+      });
 
     } catch (error) {
       console.error("Init error:", error);
@@ -188,6 +227,24 @@ function App() {
     }
   };
 
+  const handleUseLuck = useCallback((investigatorName: string, luckSpent: number) => {
+      setGameState(prev => ({
+          ...prev,
+          investigators: prev.investigators.map(inv => {
+              if (inv.name !== investigatorName) return inv;
+              const newLuck = Math.max(0, inv.attributes.Luck.current - luckSpent);
+              return {
+                  ...inv,
+                  attributes: {
+                      ...inv.attributes,
+                      Luck: { ...inv.attributes.Luck, current: newLuck }
+                  }
+              };
+          })
+      }));
+      addMessage(MessageSender.SYSTEM, `🍀 ${investigatorName} spent ${luckSpent} Luck to turn failure into success.`);
+  }, []);
+
   const handleDigitalRoll = async (result: number, type: string) => {
     setSuggestedActions([]);
     addMessage(MessageSender.SYSTEM, `🎲 ${type}: ${result}`);
@@ -217,18 +274,22 @@ function App() {
       else if (result <= Math.floor(skillValue / 2))           verdict = "HARD SUCCESS";
       else if (result <= skillValue)                           verdict = "REGULAR SUCCESS";
 
+      const lastKeeperMsg = [...messages].reverse().find(m => m.sender === MessageSender.KEEPER);
+      const pendingContext = lastKeeperMsg
+        ? `\n\nSCENE CONTEXT (the action being resolved):\n"${lastKeeperMsg.content.slice(0, 400)}"`
+        : '';
+
       msgToBackend = `[SYSTEM MESSAGE — DICE RESULT — READ THIS FIRST]:
 ▶ Investigator: ${name}
 ▶ Skill checked: ${skillName} (target value: ${skillValue})
 ▶ Dice roll: ${result}
 ▶ VERDICT: *** ${verdict} ***
+${pendingContext}
 
-
-
-CRITICAL INSTRUCTION FOR KEEPER: Narrate the direct outcome of THIS roll as a ${verdict}. 
-Do not allow a Failure to succeed. Do NOT continue any other scene. Do NOT ask for another roll.
-React only to this specific skill check result.
-Describe the consequences of this ${verdict} naturally in your story.`;
+CRITICAL INSTRUCTION FOR KEEPER: This roll resolves the action described in SCENE CONTEXT above.
+Narrate ONLY the direct outcome of THIS roll as a ${verdict} — 1 to 3 sentences.
+DO NOT invent a new scene or location. DO NOT repeat prior atmosphere or description.
+Continue from exactly where the scene context left off.`;
     } else {
       msgToBackend = `[SYSTEM MESSAGE]: Investigator ${name} performed a raw dice roll. Result: ${result}.`;
     }
@@ -287,6 +348,7 @@ Describe the consequences of this ${verdict} naturally in your story.`;
               investigators={gameState.investigators}
               onRoll={handleDigitalRoll}
               onManualSubmit={handleManualRoll}
+              onUseLuck={handleUseLuck} 
               forceActive={hasRollSuggestion}
               autoSelectedSkill={detectedSkillTarget}
             />
