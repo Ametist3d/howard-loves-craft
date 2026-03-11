@@ -12,6 +12,12 @@ sessions/
 .env
 *.env.local
 
+# Media
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.mp4
 
 # Logs
 *.log

@@ -31,17 +31,31 @@ export const SettingsModal: React.FC<Props> = ({ settings, isOpen, onClose, onUp
           </label>
 
           <label className="flex flex-col space-y-1">
+              <span className="text-sm font-bold flex justify-between">
+                <span>RAG Top-K</span>
+                <span className="text-cthulhu-blood">{settings.topK}</span>
+              </span>
+              <input
+                type="range" min="1" max="10" step="1"
+                value={settings.topK}
+                onChange={(e) => onUpdate({ ...settings, topK: parseInt(e.target.value) })}
+                className="w-full accent-gray-500"
+              />
+              <span className="text-[10px] text-gray-500">How many RAG chunks to retrieve per query</span>
+            </label>
+            
+          <label className="flex flex-col space-y-1">
             <span className="text-sm font-bold flex justify-between">
-              <span>RAG Top K Docs</span>
-              <span className="text-cthulhu-blood">{settings.topK}</span>
+              <span>Context Window</span>
+              <span className="text-cthulhu-blood">{(settings.numCtx / 1024).toFixed(0)}k</span>
             </span>
-            <input 
-              type="range" min="1" max="10" step="1"
-              value={settings.topK} 
-              onChange={(e) => onUpdate({ ...settings, topK: parseInt(e.target.value) })}
+            <input
+              type="range" min="4096" max="32768" step="4096"
+              value={settings.numCtx}
+              onChange={(e) => onUpdate({ ...settings, numCtx: parseInt(e.target.value) })}
               className="w-full accent-gray-500"
             />
-            <span className="text-[10px] text-gray-500">Docs retrieved per query</span>
+            <span className="text-[10px] text-gray-500">4k – 32k tokens. Higher = more story memory, slower</span>
           </label>
 
           <label className="flex flex-col space-y-1">

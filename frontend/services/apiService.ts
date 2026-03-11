@@ -15,6 +15,31 @@ export class ApiService {
     }
   }
 
+  public async generateAvatar(
+    name: string,
+    occupation: string,
+    physicalDescription: string,
+    eraContext?: string
+  ): Promise<string | null> {
+    try {
+      const res = await fetch(`${API_BASE}/generate-avatar`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          occupation,
+          physical_description: physicalDescription,
+          era_context: eraContext
+        })
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.image_url || null;
+    } catch {
+      return null;
+    }
+  }
+
   public async generateCharacter(userPrompt: string, language: Language, eraContext?: string): Promise<Investigator> {
     try {
       const response = await fetch(`${API_BASE}/generate-character`, {
@@ -65,6 +90,23 @@ export class ApiService {
     }
   }
 
+  pollImageStatus(generationId: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      const poll = async () => {
+        try {
+          const res = await fetch(`${API_BASE}/image-status/${generationId}`);
+          if (!res.ok) { resolve(null); return; }
+          const data = await res.json();
+          if (data.ready) { resolve(data.image_url); return; }
+        } catch {
+          resolve(null); return;
+        }
+        setTimeout(poll, 2000); 
+      };
+      setTimeout(poll, 2000);
+    });
+  }
+
   public async sendMessage(message: string, settings: AppSettings): Promise<ChatResponse> {
     try {
       const response = await fetch(`${API_BASE}/chat`, {
@@ -75,7 +117,8 @@ export class ApiService {
           message,
           rag_enabled: settings.ragEnabled,
           top_k: settings.topK,
-          temperature: settings.temperature
+          temperature: settings.temperature,
+          num_ctx: settings.numCtx
         })
       });
 

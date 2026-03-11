@@ -5,11 +5,12 @@ interface DiceRollerProps {
   investigators: Investigator[];
   onRoll: (result: number, type: 'd100' | 'd20' | 'd10' | 'd8' | 'd6' | 'd4') => void;
   onManualSubmit: (investigatorName: string, result: number, skillName?: string, skillValue?: number) => void;
+  onUseLuck: (investigatorName: string, luckSpent: number) => void;
   forceActive?: boolean;
   autoSelectedSkill?: { investigatorName: string, skillName: string } | null;
 }
 
-export const DiceRoller: React.FC<DiceRollerProps> = ({ investigators, onRoll, onManualSubmit, forceActive, autoSelectedSkill }) => {
+export const DiceRoller: React.FC<DiceRollerProps> = ({ investigators, onRoll, onManualSubmit, onUseLuck, forceActive, autoSelectedSkill }) => {
   const [rolling, setRolling] = useState(false);
   const [lastResult, setLastResult] = useState<number | null>(null);
   const [pendingResult, setPendingResult] = useState<number | null>(null); 
@@ -62,6 +63,21 @@ export const DiceRoller: React.FC<DiceRollerProps> = ({ investigators, onRoll, o
 
   const getCurrentInvestigator = () => investigators.find(i => i.name === selectedInvestigator);
 
+  const getLuckSave = () => {
+      if (!pendingResult || !selectedSkill) return null;
+      const inv = getCurrentInvestigator();
+      if (!inv) return null;
+      const [, valStr] = selectedSkill.split('|');
+      const skillValue = parseInt(valStr);
+      const luck = inv.attributes?.Luck?.current ?? 0;
+      // Already a success — no luck needed
+      if (pendingResult <= skillValue) return null;
+      const cost = pendingResult - skillValue;
+      // Not enough luck to cover the gap
+      if (cost > luck) return null;
+      return { cost, remainingLuck: luck - cost };
+  };
+
   const roll = (sides: number, type: 'd100' | 'd20' | 'd10' | 'd8' | 'd6' | 'd4') => {
     if (rolling) return;
     setRolling(true);
@@ -104,6 +120,20 @@ export const DiceRoller: React.FC<DiceRollerProps> = ({ investigators, onRoll, o
           setPendingResult(null);
           setLastResult(result);
       }
+  };
+
+  const useLuck = () => {
+      const inv = getCurrentInvestigator();
+      const save = getLuckSave();
+      if (!inv || !save || !selectedSkill) return;
+      const [skillName, valStr] = selectedSkill.split('|');
+      const skillValue = parseInt(valStr);
+      // Deduct luck in parent state
+      onUseLuck(inv.name, save.cost);
+      // Submit as a success at exactly the threshold
+      onManualSubmit(inv.name, skillValue, skillName, skillValue);
+      setPendingResult(null);
+      setLastResult(skillValue);
   };
 
   const renderSkillOptions = () => {
@@ -182,9 +212,32 @@ export const DiceRoller: React.FC<DiceRollerProps> = ({ investigators, onRoll, o
                </div>
            )}
 
-           <button onClick={confirmRoll} disabled={(!pendingResult && !manualValue)} className={`w-full py-2 text-cthulhu-900 text-sm font-bold rounded transition-all uppercase tracking-widest ${pendingResult || manualValue ? 'bg-cthulhu-blood text-white hover:bg-red-600 shadow-md animate-pulse' : 'bg-gray-700 text-gray-500 cursor-not-allowed'}`}>
-               {pendingResult ? 'CONFIRM' : 'MANUAL SUBMIT'}
-           </button>
+           {(() => {
+              const luckSave = getLuckSave();
+              const isSuccess = pendingResult !== null && selectedSkill
+                  ? pendingResult <= parseInt(selectedSkill.split('|')[1])
+                  : null;
+              return (
+                  <>
+                  {pendingResult !== null && selectedSkill && (
+                      <div className={`text-center text-xs font-mono py-1 rounded ${isSuccess ? 'text-green-400' : 'text-red-400'}`}>
+                          {isSuccess ? '✓ SUCCESS' : `✗ FAIL — need ≤${selectedSkill.split('|')[1]}, rolled ${pendingResult}`}
+                      </div>
+                  )}
+                  {luckSave && (
+                      <button onClick={useLuck}
+                          className="w-full py-2 bg-yellow-800 hover:bg-yellow-600 text-yellow-100 text-xs font-bold rounded uppercase tracking-widest transition-all border border-yellow-600">
+                          🍀 USE LUCK  (–{luckSave.cost} → {luckSave.remainingLuck} remaining)
+                      </button>
+                  )}
+                  <button onClick={confirmRoll}
+                      disabled={(!pendingResult && !manualValue)}
+                      className={`w-full py-2 text-sm font-bold rounded transition-all uppercase tracking-widest ${pendingResult || manualValue ? 'bg-cthulhu-blood text-white hover:bg-red-600 shadow-md animate-pulse' : 'bg-gray-700 text-gray-500 cursor-not-allowed'}`}>
+                      {pendingResult ? 'CONFIRM' : 'MANUAL SUBMIT'}
+                  </button>
+                  </>
+              );
+          })()}
         </div>
       )}
     </div>

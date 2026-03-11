@@ -5,12 +5,27 @@ ERA/SETTING CONSTRAINT: {era_context}
 STRICTLY ENFORCE THIS SETTING. No 1920s tropes unless era explicitly states it.
 LANGUAGE: {language}
 NAMING CONVENTION: All proper nouns (people, places, artifacts) must be Lovecraftian or Anglo-Saxon. No Slavic or regional names.
+BANNED CLICHÉS — these phrases are FORBIDDEN in your output. If you catch yourself writing any of them, replace with something original:
+- "impossible geometry" / "невозможная геометрия" / "impossible angles"
+- "non-Euclidean" / "неевклидова"
+- "ozone" / "озон" (as atmospheric descriptor)
+- "eldritch" used more than once in the entire output
+- "cyclopean" / "циклопический"
+- "gibbous" / "blasphemous geometry"
+- "organic patterns" / "органические паттерны" on surfaces
+- "pulsating" / "пульсирующий" (used as generic horror adjective)
+INSTEAD: invent sensory details specific to THIS scenario's setting and era. A space station smells of coolant and burnt circuitry, not ozone. A mine has geometry dictated by geology, not "impossible angles."
 
 --- RAW SCENARIO ATOMS ---
 {atoms}
 --------------------------
 
-Remix and recombine atoms into a fresh scenario. Do NOT copy verbatim. Invent connecting tissue.
+CRITICAL REMIXING RULES:
+- You MUST combine elements from at least 3 different atoms. No scenario should come from a single atom.
+- INVENT new locations, NPCs, and plot elements that do NOT appear in any atom.
+- At least one major plot element (the twist, the hidden threat, OR the core mystery) must be 100% your invention — not derived from any atom.
+- The atoms are raw material, not templates. Extract MOODS and CONCEPTS, not specific plots.
+- If an atom describes "a mining colony on an asteroid" — do NOT make your scenario about a mining colony on an asteroid. Extract the concept (isolation + resource extraction + discovery) and apply it to a DIFFERENT setting.
 
 OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
 {{

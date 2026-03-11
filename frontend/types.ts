@@ -60,6 +60,7 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   image?: string;
+  imageGenerating?: boolean;
 }
 
 
@@ -67,6 +68,7 @@ export interface AppSettings {
   ragEnabled: boolean;
   topK: number;
   temperature: number;
+  numCtx: number;
 }
 export interface GameState {
   phase: 'setup' | 'loading' | 'playing';
@@ -89,5 +91,7 @@ export interface ChatResponse {
     inventory_add?: string;
     inventory_remove?: string;
   };
+  image_url?: string;
+  generation_id?: string;
 }
 
