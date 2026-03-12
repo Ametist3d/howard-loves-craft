@@ -90,8 +90,8 @@ async def list_scenarios():
                     "theme": meta.get("archetype", ""),
                     "era": meta.get("lang", ""),
                     "content": "\n\n".join(
-                        data["chunks"][:3]
-                    ),  # first 3 chunks as preview
+                        data["chunks"]#[:3]
+                    ),  
                 }
             )
 
