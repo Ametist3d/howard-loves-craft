@@ -8,6 +8,7 @@ import { AppSettings } from './types';
 import { GameState, ChatMessage, MessageSender, Language, ChatResponse } from './types';
 import { apiService } from './services/apiService';
 import { SCENARIO_SEEDS } from './data/scenarios';
+import { AuthScreen } from './components/AuthScreen';
 
 const INITIAL_STATE: GameState = {
   phase: 'setup',
@@ -23,13 +24,16 @@ const INITIAL_STATE: GameState = {
 };
 
 function App() {
-  const [gameState, setGameState] = useState<GameState>(INITIAL_STATE);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [showSheet, setShowSheet] = useState(false);
-  const [suggestedActions, setSuggestedActions] = useState<string[]>([]);
-  const [showSettings, setShowSettings] = useState(false);
+    const [authToken, setAuthToken] = useState<string | null>(
+      sessionStorage.getItem('keeper_token')
+    );
+    const [gameState, setGameState] = useState<GameState>(INITIAL_STATE);
+    const [messages, setMessages] = useState<ChatMessage[]>([]);
+    const [input, setInput] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [showSheet, setShowSheet] = useState(false);
+    const [suggestedActions, setSuggestedActions] = useState<string[]>([]);
+    const [showSettings, setShowSettings] = useState(false);
 
   const addMessage = (sender: MessageSender, content: string, id?: string) => {
     const newMsg = {
@@ -216,15 +220,53 @@ function App() {
       return;
     }
 
-    try {
-      const response = await apiService.sendMessage(textToSend, gameState.settings);
-      await processAiResponse(response);
-    } catch (error) {
-      console.error("Message send error:", error);
-      addMessage(MessageSender.SYSTEM, "Connection lost to local backend.");
-    } finally {
-      setIsLoading(false);
-    }
+    // Create a placeholder Keeper message that we'll fill in token by token
+    const msgId = Date.now().toString() + Math.random();
+    setMessages(prev => [...prev, {
+      id: msgId,
+      sender: MessageSender.KEEPER,
+      content: '',
+      timestamp: Date.now(),
+      imageGenerating: false,
+    }]);
+
+    apiService.streamMessage(
+      textToSend,
+      gameState.settings,
+      // onToken — append each chunk to the message
+      (token: string) => {
+        setMessages(prev => prev.map(m =>
+          m.id === msgId ? { ...m, content: m.content + token } : m
+        ));
+      },
+      // onDone — swap raw streamed text for clean parsed narrative, apply state
+      async (result) => {
+        setIsLoading(false);
+        // Replace streamed raw JSON with the clean parsed narrative
+        setMessages(prev => prev.map(m =>
+          m.id === msgId
+            ? { ...m, content: result.narrative ?? m.content, imageGenerating: !!result.generation_id }
+            : m
+        ));
+        setSuggestedActions(result.suggested_actions || []);
+        if (result.state_updates) handleStateUpdate(result.state_updates);
+        // Poll for image if one was queued
+        if (result.generation_id) {
+          const imageUrl = await apiService.pollImageStatus(result.generation_id);
+          setMessages(prev => prev.map(m =>
+            m.id === msgId ? { ...m, image: imageUrl || undefined, imageGenerating: false } : m
+          ));
+        }
+      },
+      // onError
+      (error) => {
+        console.error("Stream error:", error);
+        setMessages(prev => prev.map(m =>
+          m.id === msgId ? { ...m, content: "(The Keeper's voice fades... connection lost.)" } : m
+        ));
+        setIsLoading(false);
+      }
+    );
   };
 
   const handleUseLuck = useCallback((investigatorName: string, luckSpent: number) => {
@@ -331,10 +373,16 @@ Continue from exactly where the scene context left off.`;
     }
   }
 
+  
+  if (!authToken) {
+    return <AuthScreen onAuthenticated={setAuthToken} />;
+  }
+  
   if (gameState.phase === 'setup') {
     return <SetupScreen onStart={handleStartGame} isLoading={isLoading} />;
   }
 
+  
   return (
     <div className="flex h-screen bg-[#0a0a0a] text-gray-200 overflow-hidden font-sans">
       <div className={`fixed inset-0 z-20 transform ${showSheet ? 'translate-x-0' : '-translate-x-full'} md:relative md:translate-x-0 md:w-1/3 lg:w-1/4 transition-transform duration-300 bg-black border-r border-gray-800`}>
