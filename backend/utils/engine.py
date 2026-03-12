@@ -1,10 +1,10 @@
 import os
 import logging
 import json
+import asyncio
 from typing import Dict
 import random
 
-# from langchain_community.llms import Ollama
 from langchain_ollama import OllamaLLM
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -12,20 +12,28 @@ from langchain_core.prompts import PromptTemplate
 
 from utils.db_session import SessionDB, create_session_db_file
 from utils.schemas import CharGenRequest, StartSessionRequest, ChatRequest
-from utils.helpers import read_prompt, extract_json, get_chat_history 
+from utils.helpers import (
+    read_prompt,
+    extract_json,
+    get_chat_history,
+    kv_get,
+    build_verdict_guard,
+    extract_last_turn_ban,
+    build_state_str,
+    build_scene_prompt,
+    compress_story,
+)
 
 logger = logging.getLogger("keeper_ai.engine")
 
 from img_gen.comfy_client import BASE_URL as _COMFY_BASE_URL
-
-# _COMFY_BASE_URL = "https://jacksonville-arms-latest-johnson.trycloudflare.com"  # update as needed
-# _COMFY_BASE_URL = "https://provided-feeds-pipe-avatar.trycloudflare.com"  # update as needed
 
 # Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _BACKEND_DIR = os.path.dirname(BASE_DIR)
 DATA_DIR = os.path.join(_BACKEND_DIR, "data")
 SESSIONS_DIR = os.path.join(DATA_DIR, "sessions")
+_REQUEST_BODY_PATH = os.path.join(_BACKEND_DIR, "img_gen", "request_body.json")
 
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 
@@ -46,6 +54,10 @@ except Exception as e:
     rules_db, scen_db = None, None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Character generation
+# ─────────────────────────────────────────────────────────────────────────────
+
 async def generate_character_logic(req: CharGenRequest) -> dict:
     llm = OllamaLLM(model="gemma3:27b", base_url="http://localhost:11434", temperature=0.7)
     chain = PromptTemplate.from_template(read_prompt("character_gen.txt")) | llm
@@ -57,9 +69,13 @@ async def generate_character_logic(req: CharGenRequest) -> dict:
     return extract_json(response_text)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Session start
+# ─────────────────────────────────────────────────────────────────────────────
+
 async def start_session_logic(req: StartSessionRequest) -> dict:
     session_id = "local_session"
-    
+
     # 1. Format the setting string
     themes_str = ', '.join(req.themes).upper() if req.themes else "STANDARD"
     era_context = req.era_context or "Cosmic Horror — derive era and aesthetics from the scenario atoms."
@@ -69,7 +85,7 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
         query_text = req.customPrompt
     elif req.scenarioType == 'prebuilt' and req.picked_seed:
         setting_desc = f"Prebuilt: {req.picked_seed[:50]}..."
-        query_text = req.picked_seed          # full scenario text → sharp RAG
+        query_text = req.picked_seed
         era_context = req.era_context or era_context
     elif req.picked_seed:
         setting_desc = f"Themes: {themes_str}"
@@ -81,14 +97,14 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
     info = create_session_db_file(SESSIONS_DIR, "Call of Cthulhu", setting_desc)
     db = SessionDB(info.db_path)
     active_dbs[session_id] = db
-    
+
     logger.info(f"Created new unique session DB: {info.db_path}")
 
     # 2. Insert Investigators
     for inv in req.investigators:
         chars = inv.get("characteristics", {})
         attrs = inv.get("attributes", {})
-        
+
         aid = db.upsert_actor(
             kind="PC",
             name=inv.get("name", "Unknown"),
@@ -105,21 +121,44 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
         )
         for skill in inv.get("skills", []):
             db.set_skill(aid, skill["name"], skill["value"])
-            
+
         db.log_event("SYS_INIT", {"note": f"Character {inv.get('name')} registered."})
 
-    # 3. PROACTIVE RAG: Pull Scenario Atoms, SYNTHESIZE a blueprint, then SAVE TO DB
+    # 3. PROACTIVE RAG: Pull Scenario Atoms → Synthesize blueprint → Save to DB
     scenario_atoms_text = ""
-    if scen_db:
+    blueprint = {}
+    blueprint = {}
+    if req.scenarioType == 'prebuilt' and req.picked_seed:
+        # ── PREBUILT: full document already in picked_seed — use it directly ──
+        scenario_atoms_text = (
+            "⚠ PREBUILT SCENARIO — FOLLOW THIS EXACTLY.\n"
+            "This is the complete, authoritative scenario document. "
+            "Every location, NPC, clue, and plot beat is defined here. "
+            "DO NOT invent replacements. DO NOT add locations or NPCs not listed. "
+            "Run this scenario as written.\n\n"
+            + req.picked_seed
+        )
+        logger.info(f"Prebuilt scenario loaded directly ({len(req.picked_seed)} chars) — skipping RAG and synthesis.")
+        db.log_event("SCENARIO_GENERATED", {"type": "prebuilt", "chars": len(req.picked_seed)})
+
+        cur = db.conn.cursor()
+        scenario_setting = req.era_context or "Derive from scenario document above"
+        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_atoms', ?)", (scenario_atoms_text,))
+        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_themes', ?)", ("PREBUILT",))
+        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_setting', ?)", (scenario_setting,))
+        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('era_context', ?)", (scenario_setting,))
+        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_source', ?)", (req.picked_seed[:100],))
+        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('language', ?)", (req.language,))
+        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_blueprint_json', ?)", ("{}",))
+        db.conn.commit()
+
+    elif scen_db:
+        # ── RANDOM / CUSTOM: existing RAG + synthesis pipeline ──
         logger.info(f"Querying Scenario DB for starting atoms using: '{query_text}'")
-        # Pull more atoms so synthesis has richer material to remix
 
-
-        # Pull MORE candidates than needed, then randomly sample
-        # This breaks the "same 6 atoms every time" loop
+        # Pull MORE candidates than needed, then randomly sample to break repetition
         scen_docs = scen_db.similarity_search(query_text, k=15)
 
-        # Split: 2 closely relevant + 2 randomly picked from the rest + 1 from a DIFFERENT theme
         top_docs = scen_docs[:3]
         remaining = scen_docs[3:]
         random.shuffle(remaining)
@@ -136,18 +175,17 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
         ]
         cross_query = random.choice(anti_queries)
         cross_docs = scen_db.similarity_search(cross_query, k=3)
-        # Pick one that ISN'T already in our set
         existing_contents = {d.page_content for d in mixed_docs}
         cross_pick = next((d for d in cross_docs if d.page_content not in existing_contents), None)
         if cross_pick:
             mixed_docs.append(cross_pick)
 
-        random.shuffle(mixed_docs)  # randomize order so model doesn't privilege first atoms
+        random.shuffle(mixed_docs)
 
         atoms = [f"ATOM {i+1}:\n{doc.page_content.strip()}" for i, doc in enumerate(mixed_docs)]
         raw_atoms_text = "\n\n".join(atoms)
 
-        # --- SYNTHESIS STEP: build a unique scenario blueprint ---
+        # Synthesis step: build a unique scenario blueprint from atoms
         logger.info("Synthesizing unique scenario blueprint from atoms...")
         lang = req.language if hasattr(req, 'language') else 'ru'
         try:
@@ -160,7 +198,6 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
                 "atoms": raw_atoms_text
             })
             blueprint = extract_json(synth_raw)
-            # Serialize blueprint into a readable context block for the Keeper
             scenario_atoms_text = (
                 f"SCENARIO TITLE: {blueprint.get('title', 'Unknown')}\n"
                 f"SETTING: {blueprint.get('era_and_setting', '')}\n"
@@ -175,14 +212,12 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
         except Exception as e:
             logger.warning(f"Scenario synthesis failed ({e}), falling back to raw atoms.")
             scenario_atoms_text = raw_atoms_text
-        # ---------------------------------------------------------
 
         db.log_event("SCENARIO_GENERATED", {"query": query_text})
 
-        # --- Populate DB tables from blueprint skeleton ---
+        # Populate DB tables from blueprint skeleton
         if isinstance(blueprint, dict):
-            # Locations
-            loc_id_map = {}  # name -> id, for clue linking
+            loc_id_map = {}
             for loc in blueprint.get("locations", []):
                 lid = db.upsert_location(
                     name=loc.get("name", "Unknown"),
@@ -191,7 +226,6 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
                 )
                 loc_id_map[loc.get("name", "")] = lid
 
-            # NPCs
             for npc in blueprint.get("npcs", []):
                 role = npc.get("role", "neutral")
                 kind = "ENEMY" if "enemy" in role else "NPC"
@@ -202,7 +236,6 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
                     notes=npc.get("secret", "")
                 )
 
-            # Clues (hidden by default — Keeper reveals them)
             for clue in blueprint.get("clues", []):
                 loc_name = clue.get("location", "")
                 db.upsert_clue(
@@ -212,15 +245,13 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
                     location_id=loc_id_map.get(loc_name)
                 )
 
-            # Plot threads
             for thread in blueprint.get("plot_threads", []):
                 db.upsert_thread(
                     name=thread.get("name", "Thread"),
                     stakes=thread.get("stakes", ""),
                     max_progress=thread.get("steps", 4)
                 )
-        
-        # scenario_setting = blueprint.get('era_and_setting', 'Lovecraftian Horror Arcane Lore for a Call of Cthulhu') if isinstance(blueprint, dict) else 'Lovecraftian Horror Arcane Lore for a Call of Cthulhu'
+
         scenario_setting = (
             blueprint.get('era_and_setting') or era_context
             if isinstance(blueprint, dict)
@@ -233,30 +264,31 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
         cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('era_context', ?)", (era_context,))
         cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_source', ?)", (req.picked_seed[:100],))
         cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('language', ?)", (req.language,))
-        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_blueprint_json', ?)", 
-            (json.dumps(blueprint, ensure_ascii=False) if isinstance(blueprint, dict) else "{}",))
+        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_blueprint_json', ?)",
+                    (json.dumps(blueprint, ensure_ascii=False) if isinstance(blueprint, dict) else "{}",))
         db.conn.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)", ("scenario_era", era_context))
         db.conn.commit()
 
-        # ── DEBUG: verify what's actually stored ──────────────────────────────────────
+        # DEBUG
         print(f"==>> [SESSION START] era_context passed in : {repr(req.era_context)}")
         print(f"==>> [SESSION START] era_context stored    : {repr(era_context)}")
         print(f"==>> [SESSION START] scenario_setting stored: {repr(scenario_setting)}")
         print(f"==>> [SESSION START] themes_str            : {repr(themes_str)}")
-        # ─────────────────────────────────────────────────────────────────────────────
 
-    # 4. Simple trigger message
-    start_msg = "Начни историю. Опиши стартовую локацию." if req.language == 'ru' else "Start the story. Describe the starting location."
+    # 4. Trigger opening narration
+    start_msg = (
+        "Начни историю. Опиши стартовую локацию."
+        if req.language == 'ru'
+        else "Start the story. Describe the starting location."
+    )
     return await handle_chat_logic(ChatRequest(message=start_msg, session_id=session_id))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Avatar generation
+# ─────────────────────────────────────────────────────────────────────────────
+
 async def generate_avatar_logic(req) -> dict:
-    from pathlib import Path as _Path
-
-    # _COMFY_BASE_URL = "https://provided-feeds-pipe-avatar.trycloudflare.com"
-    _REQUEST_BODY_PATH = _Path(__file__).resolve().parent.parent / "img_gen" / "request_body.json"
-
-    # Build portrait prompt
     tpl = PromptTemplate.from_template(
         "You are a prompt engineer for Flux, a natural-language image model.\n"
         "Write a portrait prompt for this character. Era/setting: {era}.\n\n"
@@ -276,27 +308,29 @@ async def generate_avatar_logic(req) -> dict:
         "occupation": req.occupation,
         "description": req.physical_description
     }).strip()
-    portrait_prompt = " ".join(l.strip() for l in portrait_prompt.splitlines() if l.strip())
+    portrait_prompt = " ".join(line.strip() for line in portrait_prompt.splitlines() if line.strip())
 
     logger.info(f"Avatar prompt for {req.name}: {portrait_prompt}")
 
     try:
         from img_gen.comfy_client import ComfyClient
         _comfy = ComfyClient(_COMFY_BASE_URL)
-        with open(_REQUEST_BODY_PATH, "r", encoding="utf-8") as _f:
-            _body = json.load(_f)
-        _body["params"]["prompt"] = portrait_prompt
-        _body["params"]["width"] = 480
-        _body["params"]["height"] = 640
-        img_result = _comfy.generate(_body)
-        return {
-            "image_url": img_result["image_url"],
-            "portrait_prompt": portrait_prompt
-        }
+        with open(_REQUEST_BODY_PATH, "r", encoding="utf-8") as f:
+            body = json.load(f)
+        body["params"]["prompt"] = portrait_prompt
+        body["params"]["width"] = 480
+        body["params"]["height"] = 640
+        img_result = _comfy.generate(body)
+        return {"image_url": img_result["image_url"], "portrait_prompt": portrait_prompt}
     except Exception as e:
         logger.warning(f"Avatar generation failed for {req.name}: {e}")
         return {"image_url": None, "portrait_prompt": portrait_prompt}
-    
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Main chat handler
+# ─────────────────────────────────────────────────────────────────────────────
+
 async def handle_chat_logic(req: ChatRequest) -> dict:
     if req.session_id not in active_dbs:
         info = create_session_db_file(SESSIONS_DIR, "Fallback Session", "Standard")
@@ -304,106 +338,71 @@ async def handle_chat_logic(req: ChatRequest) -> dict:
 
     db = active_dbs[req.session_id]
     db.log_event("CHAT", {"role": "User", "content": req.message})
-    
-    # 1. Fetch Permanent Campaign Module (Atoms) from DB
+
     cur = db.conn.cursor()
-    cur.execute("SELECT value FROM kv_store WHERE key='scenario_atoms'")
-    row_atoms = cur.fetchone()
-    campaign_atoms = row_atoms["value"] if row_atoms else ""
-    
-    cur.execute("SELECT value FROM kv_store WHERE key='scenario_themes'")
-    row_themes = cur.fetchone()
-    themes = row_themes["value"] if row_themes else "STANDARD"
 
-    # 2. Build Context
+    # 1. Load kv_store session values
+    campaign_atoms  = kv_get(cur, "scenario_atoms")
+    themes          = kv_get(cur, "scenario_themes", "STANDARD")
+    setting_override = kv_get(cur, "scenario_setting", "Lovecraftian Horror Lore")
+    era_override    = kv_get(cur, "era_context", "1920s Lovecraftian Horror")
+    session_language = kv_get(cur, "language", "en")
+
+    # DEBUG
+    print(f"==>> [CHAT] setting_override read from DB : {repr(setting_override)}")
+    print(f"==>> [CHAT] era_override read from DB     : {repr(era_override)}")
+
+    # 2. Build context string
     context_str = ""
-    if campaign_atoms:
-        context_str += f"""
---- SCENARIO BLUEPRINT (THEMES: {themes}) ---
-You are running THIS specific scenario. Every narrative choice must serve it.
-DO NOT fall back to generic 1920s tropes. USE the setting, hook, NPCs, and threat below.
-{campaign_atoms}
----------------------------------------------\n\n"""
 
-    # 3. Standard RAG (Skip standard RAG on the very first "Start the story" message to avoid polluting context)
+    # Story digest — primary long-term continuity anchor
+    story_digest = kv_get(cur, "story_digest")
+    if story_digest:
+        context_str += (
+            "═══════════════════════════════════════════\n"
+            "STORY SO FAR — READ THIS FIRST\n"
+            "This is a factual record of everything that has happened in this session.\n"
+            "Treat it as ground truth. Do NOT contradict, repeat, or re-discover anything listed here.\n"
+            f"{story_digest}\n"
+            "═══════════════════════════════════════════\n\n"
+        )
+
+    # Scenario blueprint
+    if campaign_atoms:
+        context_str += (
+            f"--- SCENARIO BLUEPRINT (THEMES: {themes}) ---\n"
+            "You are running THIS specific scenario. Every narrative choice must serve it.\n"
+            "DO NOT fall back to generic 1920s tropes. USE the setting, hook, NPCs, and threat below.\n"
+            f"{campaign_atoms}\n"
+            "---------------------------------------------\n\n"
+        )
+
+    # 3. Standard RAG (skip on the first "Start the story" to avoid polluting context)
     is_start_msg = "Начни историю" in req.message or "Start the story" in req.message
     if req.rag_enabled and rules_db and scen_db and not is_start_msg:
-        all_docs = rules_db.similarity_search(req.message, k=req.top_k) + scen_db.similarity_search(req.message, k=req.top_k)
+        all_docs = (
+            rules_db.similarity_search(req.message, k=req.top_k)
+            + scen_db.similarity_search(req.message, k=req.top_k)
+        )
         context_str += "--- RELEVANT RULEBOOK/SCENARIO LORE ---\n"
         context_str += "\n\n".join([doc.page_content for doc in all_docs])
-    
-    # 4. State Injection
-        # 4. State Injection — full scenario skeleton
-    pack = db.build_prompt_state_pack()
-    state_str = (
-        f"INVESTIGATORS:\n{pack.get('investigators_text')}\n\n"
-        f"KNOWN NPCs:\n{pack.get('npcs_text')}\n\n"
-        f"CURRENT LOCATION:\n{pack.get('location_text')}\n\n"
-        f"PLOT THREADS:\n{pack.get('threads_text')}\n\n"
-        f"DISCOVERED CLUES:\n{pack.get('clues_text')}"
-    )
 
-    # 5. Invoke LLM
+    # 4. State injection
+    pack = db.build_prompt_state_pack()
+    state_str = build_state_str(pack)
+
+    # 5. Per-turn guards
+    verdict_guard = build_verdict_guard(req.message)
+    last_turn_ban = extract_last_turn_ban(db)
+
+    # 6. Invoke LLM
     llm = OllamaLLM(
         model="gemma3:27b",
         base_url="http://localhost:11434",
         temperature=req.temperature,
         num_ctx=req.num_ctx,
-        # keep_alive=0, 
     )
     chain = PromptTemplate.from_template(read_prompt("keeper_chat.txt")) | llm
-    
-    # Send to LLM
-        # Fetch setting override from blueprint if available
-    cur.execute("SELECT value FROM kv_store WHERE key='scenario_setting'")
-    row_setting = cur.fetchone()
-    setting_override = row_setting["value"] if row_setting else "Lovecraftian Horror Lore"
-
-    cur.execute("SELECT value FROM kv_store WHERE key='era_context'")
-    row_era = cur.fetchone()
-    era_override = row_era["value"] if row_era else "1920s Lovecraftian Horror"
-    
-    cur.execute("SELECT value FROM kv_store WHERE key='language'")
-    row_lang = cur.fetchone()
-    session_language = row_lang["value"] if row_lang else "en"
-
-    # ── DEBUG ──────────────────────────────────────────────────────────────────────
-    print(f"==>> [CHAT] setting_override read from DB : {repr(setting_override)}")
-    print(f"==>> [CHAT] era_override read from DB     : {repr(era_override)}")
-    # ─────────────────────────────────────────────────────────────────────────────
-
-    # Detect VERDICT messages and inject an explicit anti-repetition guard
-    is_verdict = "[SYSTEM MESSAGE]" in req.message and "VERDICT" in req.message
-    if is_verdict:
-        verdict_guard = (
-            "\n\n⚠ VERDICT RECEIVED. STRICT RULES FOR THIS RESPONSE:\n"
-            "- Write 1–3 sentences MAXIMUM.\n"
-            "- Describe ONLY what changed due to this roll result.\n"
-            "- DO NOT reproduce or paraphrase any prior narrative.\n"
-            "- DO NOT re-describe the location, NPCs, or atmosphere.\n"
-            "- Start mid-action, from the moment the roll resolves.\n"
-        )
-    else:
-        verdict_guard = ""
-
-    # ── DYNAMIC BAN LIST: extract key phrases from last Keeper turn ────────────
-    last_turn_ban = ""
-    last_keeper_events = [
-        e for e in db.list_events(limit=6)
-        if e.get("event_type") == "CHAT" and e.get("payload", {}).get("role") == "Keeper"
-    ]
-    if last_keeper_events:
-        last_narrative = last_keeper_events[0].get("payload", {}).get("content", "")
-        # Extract first 5 sentences as banned phrases
-        import re as _re
-        sentences = [s.strip() for s in _re.split(r'[.!?。]', last_narrative) if len(s.strip()) > 20]
-        if sentences:
-            banned = sentences[:5]
-            last_turn_ban = (
-                "PHRASES FROM YOUR PREVIOUS RESPONSE (DO NOT REUSE OR PARAPHRASE THESE):\n"
-                + "\n".join(f'- "{s[:80]}"' for s in banned)
-            )
-    # ────────────────────────────────────────────────────────────────────────────
 
     response_text = chain.invoke({
         "language": session_language,
@@ -413,43 +412,11 @@ DO NOT fall back to generic 1920s tropes. USE the setting, hook, NPCs, and threa
         "action": req.message,
         "last_turn_ban": last_turn_ban,
     })
-    
+
     result = extract_json(response_text)
 
-    # ── IMAGE GENERATION ──────────────────────────────────────────────────────────
-    import json as _json
-    from pathlib import Path as _Path
-
-    
-    _REQUEST_BODY_PATH = _Path(__file__).resolve().parent.parent / "img_gen" / "request_body.json"
-
-    def _build_scene_prompt(narrative: str, era: str = "", setting: str = "", visual_history: str = "", char_visuals: str = "") -> str:
-        tpl = PromptTemplate.from_template(
-            "You are a prompt engineer for Flux, a natural-language image model. "
-            "Your job is to generate a consistent visual description across a series of scenes.\n\n"
-            "Setting/Era context: {era}, {setting}\n\n"
-            "{char_visuals}\n\n"
-            "PREVIOUS SCENE DESCRIPTIONS (for visual consistency):\n{visual_history}\n\n"
-            "STEP 1 — Read the ENTIRE narrative. Identify the single element that carries the most narrative weight.\n"
-            "STEP 2 — Frame it as a close or medium shot. That element must be the visual centerpiece.\n"
-            "STEP 3 — Write 2-3 short natural sentences. If characters from the established list appear, "
-            "describe them using their established appearance. Match era and setting in every detail.\n"
-            "STEP 4 — Append exactly: 'Painterly digital illustration, pulp horror aesthetic, dramatic lighting, rich deep colors.'\n\n"
-            "RULES:\n"
-            "- English only. No character names. No smell or sound.\n"
-            "- Output ONLY the final prompt, nothing else\n\n"
-            "NARRATIVE:\n{narrative}\n\nPROMPT:"
-        )
-        llm = OllamaLLM(model="gemma3:27b", base_url="http://localhost:11434", temperature=0.3)
-        raw = (tpl | llm).invoke({
-            "narrative": narrative, "era": era, "setting": setting,
-            "visual_history": visual_history or "No previous scenes yet.",
-            "char_visuals": char_visuals or ""
-        }).strip()
-        return " ".join(l.strip() for l in raw.splitlines() if l.strip())
-
-    import asyncio, uuid as _uuid
-    gen_id = _uuid.uuid4().hex
+    # 7. Background image generation
+    gen_id = __import__("uuid").uuid4().hex
     _image_results[gen_id] = "pending"
     result["generation_id"] = gen_id
     result["image_url"] = None
@@ -462,53 +429,56 @@ DO NOT fall back to generic 1920s tropes. USE the setting, hook, NPCs, and threa
             visual_history = ""
             char_visuals = ""
             if req.session_id in active_dbs:
-                db = active_dbs[req.session_id]
-                cur = db.conn.cursor()
-                cur.execute("SELECT value FROM kv_store WHERE key='visual_history'")
-                row = cur.fetchone()
-                visual_history = row["value"] if row else ""
-
-                # Load all stored character visual descriptions
-                cur.execute("SELECT key, value FROM kv_store WHERE key LIKE 'char_visual_%'")
-                rows = cur.fetchall()
+                _db = active_dbs[req.session_id]
+                _cur = _db.conn.cursor()
+                visual_history = kv_get(_cur, "visual_history")
+                _cur.execute("SELECT key, value FROM kv_store WHERE key LIKE 'char_visual_%'")
+                rows = _cur.fetchall()
                 if rows:
                     char_visuals = "ESTABLISHED CHARACTERS (maintain consistent appearance):\n"
                     char_visuals += "\n".join(f"- {r['value']}" for r in rows)
 
-            scene_prompt = _build_scene_prompt(
+            scene_prompt = build_scene_prompt(
                 narrative, era=era, setting=setting,
                 visual_history=visual_history,
-                char_visuals=char_visuals          # ← NEW
+                char_visuals=char_visuals,
             )
             logger.info(f"Image prompt [{gid}]: {scene_prompt}")
-            with open(_REQUEST_BODY_PATH, "r", encoding="utf-8") as _f:
-                _body = json.load(_f)
-            _body["params"]["prompt"] = scene_prompt
-            img_result = _comfy.generate(_body)
+            with open(_REQUEST_BODY_PATH, "r", encoding="utf-8") as f:
+                body = json.load(f)
+            body["params"]["prompt"] = scene_prompt
+            img_result = _comfy.generate(body)
             _image_results[gid] = img_result["image_url"]
             logger.info(f"Image ready [{gid}]: {img_result['image_url']}")
-        except Exception as _e:
-            logger.warning(f"Image generation failed [{gid}]: {_e}")
+        except Exception as e:
+            logger.warning(f"Image generation failed [{gid}]: {e}")
             _image_results[gid] = None
 
     asyncio.create_task(_generate_image_bg(
         gen_id,
         result.get("narrative", ""),
         setting=setting_override,
-        era=era_override            # ← actual era from DB
+        era=era_override,
     ))
-    # ─────────────────────────────────────────────────────────────────────────────
+
+    # 8. Log Keeper turn + trigger compression every 5 turns
     db.log_event("CHAT", {"role": "Keeper", "content": result.get("narrative", "")})
-    
-    # 6. Apply State Updates
+
+    turn_count = int(kv_get(cur, "turn_count", "0")) + 1
+    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('turn_count', ?)", (str(turn_count),))
+    db.conn.commit()
+
+    if turn_count % 5 == 0:
+        asyncio.create_task(compress_story(db))
+        logger.info(f"Story compression triggered at turn {turn_count}")
+
+    # 9. Apply state updates
     if state_updates := result.get("state_updates"):
 
-        # --- PC stat changes ---
         if target_name := state_updates.get("character_name"):
             all_actors = db.list_actors("PC") + db.list_actors("NPC") + db.list_actors("ENEMY")
             target = next((a for a in all_actors if target_name.lower() in a["name"].lower()), None)
             if target:
-                changes = {}
                 hp_change  = int(state_updates.get("hp_change", 0) or 0)
                 san_change = int(state_updates.get("sanity_change", 0) or 0)
                 mp_change  = int(state_updates.get("mp_change", 0) or 0)
@@ -518,29 +488,23 @@ DO NOT fall back to generic 1920s tropes. USE the setting, hook, NPCs, and threa
                     new_san = max(0, (target.get("san") or 0) + san_change)
                     new_mp  = max(0, (target.get("mp")  or 0) + mp_change)
 
-                    # Derive status
                     status = target.get("status", "ok")
-                    if new_hp == 0:
-                        status = "dead"
-                    elif new_san == 0:
-                        status = "insane"
-                    elif hp_change < 0:
-                        status = "injured"
+                    if new_hp == 0:       status = "dead"
+                    elif new_san == 0:    status = "insane"
+                    elif hp_change < 0:   status = "injured"
 
                     db.upsert_actor(
                         actor_id=target["id"], kind=target["kind"], name=target["name"],
                         hp=new_hp, san=new_san, mp=new_mp, status=status
                     )
-                    changes = {
+                    db.log_event("STATE_UPDATE", {
                         "actor": target["name"],
                         **({f"hp": f"{hp_change:+} → {new_hp}"} if hp_change else {}),
                         **({f"san": f"{san_change:+} → {new_san}"} if san_change else {}),
                         **({f"mp": f"{mp_change:+} → {new_mp}"} if mp_change else {}),
-                        "status": status
-                    }
-                    db.log_event("STATE_UPDATE", changes)
+                        "status": status,
+                    })
 
-                # Inventory
                 if item_add := state_updates.get("inventory_add", ""):
                     db.upsert_clue(title=item_add, content=f"Carried by {target['name']}", status="found")
                     db.log_event("INVENTORY", {"actor": target["name"], "added": item_add})
@@ -548,33 +512,27 @@ DO NOT fall back to generic 1920s tropes. USE the setting, hook, NPCs, and threa
                 if item_remove := state_updates.get("inventory_remove", ""):
                     db.log_event("INVENTORY", {"actor": target["name"], "removed": item_remove})
 
-        # --- Location change ---
         if new_location := state_updates.get("location_name", ""):
             existing = db.get_location_by_name(new_location)
-            if existing:
-                loc_id = existing["id"]
-            else:
-                loc_id = db.upsert_location(name=new_location, description=state_updates.get("location_description", ""))
-            # Move all PCs to new location
+            loc_id = existing["id"] if existing else db.upsert_location(
+                name=new_location,
+                description=state_updates.get("location_description", "")
+            )
             for pc in db.list_actors("PC"):
                 db.upsert_actor(actor_id=pc["id"], kind="PC", name=pc["name"], location_id=loc_id)
             db.log_event("LOCATION_CHANGE", {"location": new_location})
 
-        # --- Clue discovered ---
         if clue_found := state_updates.get("clue_found", ""):
             clues = db.list_clues(status="hidden")
             match = next((c for c in clues if clue_found.lower() in c["title"].lower()), None)
             if match:
-                db.upsert_clue(
-                    clue_id=match["id"], title=match["title"],
-                    content=match["content"], status="found"
-                )
+                db.upsert_clue(clue_id=match["id"], title=match["title"],
+                               content=match["content"], status="found")
             else:
-                # Brand new clue not in blueprint — add it
-                db.upsert_clue(title=clue_found, content=state_updates.get("clue_content", ""), status="found")
+                db.upsert_clue(title=clue_found,
+                               content=state_updates.get("clue_content", ""), status="found")
             db.log_event("CLUE_FOUND", {"clue": clue_found})
 
-        # --- Thread progress ---
         if thread_name := state_updates.get("thread_progress", ""):
             threads = db.list_threads()
             match = next((t for t in threads if thread_name.lower() in t["name"].lower()), None)
@@ -584,7 +542,7 @@ DO NOT fall back to generic 1920s tropes. USE the setting, hook, NPCs, and threa
                     progress=min(match["progress"] + 1, match["max_progress"]),
                     max_progress=match["max_progress"], stakes=match.get("stakes", "")
                 )
-                db.log_event("THREAD_PROGRESS", {"thread": match["name"], "progress": match["progress"] + 1})
+                db.log_event("THREAD_PROGRESS", {"thread": match["name"],
+                                                   "progress": match["progress"] + 1})
 
     return result
-

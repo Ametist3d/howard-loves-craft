@@ -12,6 +12,11 @@ sessions/
 .env
 *.env.local
 
+#DataBase
+*.sqlite
+coc_rules_db/
+coc_scenario_db/
+
 # Media
 *.jpg
 *.jpeg
@@ -22,3 +27,14 @@ sessions/
 # Logs
 *.log
 logs/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

@@ -145,10 +145,16 @@ Always generate EXACTLY 3 suggested_actions. They must:
    WRONG: "Поговорить с местными жителями"
    CORRECT: "Расспросить доктора Веллса о странных ожогах на телах"
 
-4. RESPECT THE INFORMATION BOUNDARY — suggested actions must only reference what investigators
-   KNOW or CAN SEE. Never hint at hidden blueprint elements the players haven't encountered.
-   WRONG: "Найти культистов в подвале" (players don't know about cultists yet)
-   CORRECT: "Выяснить, куда делся ночной сторож"
+4. INFORMATION WALL — STRICTLY ENFORCED:
+   Before writing any suggested action, ask: "Did this name/place/person appear in THIS turn's
+   narrative or in prior confirmed player knowledge?" If NO — it is FORBIDDEN.
+   Blueprint NPCs, locations, and objects are INVISIBLE to players until narrated.
+   WRONG: "Расспросить доктора Веллса о символе" (Wells never appeared in narrative)
+   WRONG: "Найти культистов в подвале" (players don't know about cultists)
+   CORRECT: "Показать медальон мистеру Уэйтли, когда войдете в дом"
+   CORRECT: "Осмотреть узоры рун еще раз"
+   If no NPC has appeared yet — suggested actions MUST be environmental or object-based only.
+   NEVER use a proper name in suggested actions that has not been spoken aloud in the narrative.
 
 5. NEVER suggest actions already attempted this turn or in the last 2 exchanges.
 
