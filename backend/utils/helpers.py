@@ -186,7 +186,6 @@ def build_scene_prompt(
     Uses a low-temperature Gemma call for consistency.
     Imported here to keep engine.py free of nested function definitions.
     """
-    from langchain_ollama import OllamaLLM
     from langchain_core.prompts import PromptTemplate
 
     tpl = PromptTemplate.from_template(
@@ -205,7 +204,7 @@ def build_scene_prompt(
         "- Output ONLY the final prompt, nothing else\n\n"
         "NARRATIVE:\n{narrative}\n\nPROMPT:"
     )
-    llm = OllamaLLM(model="gemma3:27b", base_url="http://localhost:11434", temperature=0.3)
+    llm = get_llm(temperature=0.3)
     raw = (tpl | llm).invoke({
         "narrative": narrative,
         "era": era,
@@ -228,8 +227,6 @@ async def compress_story(db: SessionDB) -> None:
     long-term memory anchor.
     """
     try:
-        from langchain_ollama import OllamaLLM
-
         all_events = db.list_events(limit=60)
         chat_lines = []
         for e in all_events:
@@ -260,7 +257,7 @@ async def compress_story(db: SessionDB) -> None:
             f"DIGEST:"
         )
 
-        llm = OllamaLLM(model="gemma3:27b", base_url="http://localhost:11434", temperature=0.2)
+        llm = get_llm(temperature=0.2)
         digest = llm.invoke(compression_prompt).strip()
 
         cur.execute(
@@ -272,3 +269,45 @@ async def compress_story(db: SessionDB) -> None:
 
     except Exception as e:
         logger.warning(f"Story compression failed: {e}")
+
+
+# ─────────────────────────────────────────────
+# LLM factory — provider-agnostic
+# ─────────────────────────────────────────────
+
+def get_llm(temperature: float = 0.7, *, streaming: bool = False):
+    """
+    Returns a LangChain LLM configured from .env.
+
+    .env keys:
+        LLM_PROVIDER   = "ollama" | "openai"          (default: ollama)
+        OLLAMA_MODEL   = "gemma3:27b"                  (default)
+        OLLAMA_BASE_URL= "http://localhost:11434"       (default)
+        OPENAI_MODEL   = "gpt-4o"                      (default)
+        OPENAI_API_KEY = "sk-..."                      (required for openai)
+    """
+    provider = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
+
+    if provider == "openai":
+        from langchain_openai import ChatOpenAI
+        from langchain_core.output_parsers import StrOutputParser
+        model = os.getenv("OPENAI_MODEL", "gpt-4o")
+        api_key = os.getenv("OPENAI_API_KEY", "")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY is not set in .env")
+        return ChatOpenAI(
+            model=model,
+            temperature=temperature,
+            api_key=api_key,
+            streaming=streaming,
+        ) | StrOutputParser()
+
+    # Default: Ollama
+    from langchain_ollama import OllamaLLM
+    model = os.getenv("OLLAMA_MODEL", "gemma3:27b")
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    return OllamaLLM(
+        model=model,
+        base_url=base_url,
+        temperature=temperature,
+    )

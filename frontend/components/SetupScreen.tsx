@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Language } from '../types';
+import { Language, PrebuiltScenario } from '../types';
 import { DATA_EN, DATA_RU } from '../data/names';
 import { apiService } from '../services/apiService';
 
@@ -10,12 +10,6 @@ interface InvestigatorConfig {
   background: string;
 }
 
-interface PrebuiltScenario {
-  id: string;
-  title: string;
-  content: string;
-}
-
 interface Props {
   onStart: (config: {
     investigators: InvestigatorConfig[];
@@ -24,6 +18,7 @@ interface Props {
     themes?: string[];
     language: Language;
     prebuiltScenario?: PrebuiltScenario | null;
+    llmProvider: 'ollama' | 'openai';
   }) => void;
   isLoading: boolean;
 }
@@ -51,6 +46,7 @@ const THEMES = [
 export const SetupScreen: React.FC<Props> = ({ onStart, isLoading }) => {
   const [investigators, setInvestigators] = useState<InvestigatorConfig[]>([]);
   const [language, setLanguage] = useState<Language>('ru');
+  const [llmProvider, setLlmProvider] = useState<'ollama' | 'openai'>('ollama');
   const [newName, setNewName] = useState('');
   const [newOccupation, setNewOccupation] = useState('');
   const [newBackground, setNewBackground] = useState('');
@@ -109,10 +105,16 @@ export const SetupScreen: React.FC<Props> = ({ onStart, isLoading }) => {
   return (
     <div className="w-full h-screen bg-cthulhu-900 text-gray-200 flex flex-col overflow-hidden font-sans relative">
 
-      {/* Language toggle */}
-      <div className="absolute top-4 right-4 flex bg-black/60 rounded-lg p-1 backdrop-blur-md border border-gray-700 z-50">
-        <button onClick={() => setLanguage('ru')} className={`px-3 py-1 text-xs font-bold rounded-md ${language === 'ru' ? 'bg-cthulhu-blood text-white' : 'text-gray-400'}`}>RU</button>
-        <button onClick={() => setLanguage('en')} className={`px-3 py-1 text-xs font-bold rounded-md ${language === 'en' ? 'bg-cthulhu-blood text-white' : 'text-gray-400'}`}>EN</button>
+      {/* Language + LLM provider toggles */}
+      <div className="absolute top-4 right-4 flex gap-2 z-50">
+        <div className="flex bg-black/60 rounded-lg p-1 backdrop-blur-md border border-gray-700">
+          <button onClick={() => setLlmProvider('ollama')} className={`px-3 py-1 text-xs font-bold rounded-md ${llmProvider === 'ollama' ? 'bg-indigo-700 text-white' : 'text-gray-400'}`}>LOCAL</button>
+          <button onClick={() => setLlmProvider('openai')} className={`px-3 py-1 text-xs font-bold rounded-md ${llmProvider === 'openai' ? 'bg-green-800 text-white' : 'text-gray-400'}`}>GPT-4o</button>
+        </div>
+        <div className="flex bg-black/60 rounded-lg p-1 backdrop-blur-md border border-gray-700">
+          <button onClick={() => setLanguage('ru')} className={`px-3 py-1 text-xs font-bold rounded-md ${language === 'ru' ? 'bg-cthulhu-blood text-white' : 'text-gray-400'}`}>RU</button>
+          <button onClick={() => setLanguage('en')} className={`px-3 py-1 text-xs font-bold rounded-md ${language === 'en' ? 'bg-cthulhu-blood text-white' : 'text-gray-400'}`}>EN</button>
+        </div>
       </div>
 
       {/* Title — flex-none, never grows */}
@@ -225,7 +227,7 @@ export const SetupScreen: React.FC<Props> = ({ onStart, isLoading }) => {
       {/* BEGIN — flex-none at bottom */}
       <div className="flex-none py-6 flex flex-col items-center gap-2 z-10">
         <button
-          onClick={() => onStart({ investigators, scenario, customPrompt, themes: selectedThemes, language, prebuiltScenario: selectedPrebuilt })}
+          onClick={() => onStart({ investigators, scenario, customPrompt, themes: selectedThemes, language, prebuiltScenario: selectedPrebuilt, llmProvider })}
           disabled={!canStart}
           className="w-full max-w-md bg-cthulhu-paper text-cthulhu-900 font-bold font-serif py-3 rounded border-2 border-cthulhu-paper hover:bg-transparent hover:text-cthulhu-paper transition-all uppercase tracking-widest text-lg disabled:opacity-50"
         >

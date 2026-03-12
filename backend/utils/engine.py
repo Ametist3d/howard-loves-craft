@@ -4,15 +4,13 @@ import json
 from typing import Dict
 import random
 
-# from langchain_community.llms import Ollama
-from langchain_ollama import OllamaLLM
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.prompts import PromptTemplate
 
 from utils.db_session import SessionDB, create_session_db_file
 from utils.schemas import CharGenRequest, StartSessionRequest, ChatRequest
-from utils.helpers import read_prompt, extract_json, get_chat_history 
+from utils.helpers import read_prompt, extract_json, get_chat_history, get_llm 
 
 logger = logging.getLogger("keeper_ai.engine")
 
@@ -47,7 +45,7 @@ except Exception as e:
 
 
 async def generate_character_logic(req: CharGenRequest) -> dict:
-    llm = OllamaLLM(model="gemma3:27b", base_url="http://localhost:11434", temperature=0.7)
+    llm = get_llm(temperature=0.7)
     chain = PromptTemplate.from_template(read_prompt("character_gen.txt")) | llm
     response_text = chain.invoke({
         "language": req.language,
@@ -98,7 +96,7 @@ DO NOT speculate. Only record what actually happened in the exchanges above.
 Maximum 220 words. No preamble. Start directly with "1."
 DIGEST:"""
 
-        compress_llm = OllamaLLM(model="gemma3:27b", base_url="http://localhost:11434", temperature=0.2)
+        compress_llm = get_llm(temperature=0.2)
         digest = compress_llm.invoke(compression_prompt).strip()
         
         cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('story_digest', ?)", (digest,))
@@ -201,7 +199,7 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
         logger.info("Synthesizing unique scenario blueprint from atoms...")
         lang = req.language if hasattr(req, 'language') else 'ru'
         try:
-            synth_llm = OllamaLLM(model="gemma3:27b", base_url="http://localhost:11434", temperature=0.9)
+            synth_llm = get_llm(temperature=0.9)
             synth_chain = PromptTemplate.from_template(read_prompt("scenario_gen.txt")) | synth_llm
             synth_raw = synth_chain.invoke({
                 "themes": themes_str,
@@ -320,7 +318,7 @@ async def generate_avatar_logic(req) -> dict:
         "- Output ONLY the prompt, nothing else\n\n"
         "PORTRAIT PROMPT:"
     )
-    llm = OllamaLLM(model="gemma3:27b", base_url="http://localhost:11434", temperature=0.3)
+    llm = get_llm(temperature=0.3)
     portrait_prompt = (tpl | llm).invoke({
         "era": req.era_context or "1920s Lovecraftian Horror",
         "occupation": req.occupation,
@@ -354,6 +352,13 @@ async def handle_chat_logic(req: ChatRequest) -> dict:
 
     db = active_dbs[req.session_id]
     db.log_event("CHAT", {"role": "User", "content": req.message})
+    dead_pcs = [a for a in db.list_actors("PC") if a.get("status") in ("dead", "insane")]
+    if dead_pcs:
+        names = ", ".join(a["name"] for a in dead_pcs)
+        req = req.model_copy(update={"message": 
+            req.message + f"\n\n[KEEPER NOTE: {names} are dead/incapacitated and cannot act. "
+            f"Do not narrate their actions. Acknowledge their fate if relevant.]"
+        })
     
     # 1. Fetch Permanent Campaign Module (Atoms) from DB
     cur = db.conn.cursor()
@@ -398,22 +403,27 @@ DO NOT fall back to generic 1920s tropes. USE the setting, hook, NPCs, and threa
     # 4. State Injection
         # 4. State Injection — full scenario skeleton
     pack = db.build_prompt_state_pack()
+    # Only surface NPCs the Keeper has already narrated — prevents blueprint leaking names
+    all_chat = " ".join(
+        e.get("payload", {}).get("content", "")
+        for e in db.list_events(limit=60)
+        if e.get("event_type") == "CHAT" and e.get("payload", {}).get("role") == "Keeper"
+    ).lower()
+    met_npcs = [
+        line for line in (pack.get('npcs_text') or '').splitlines()
+        if any(word.lower() in all_chat for word in line.split() if len(word) > 4)
+    ] or ["(none yet)"]
     state_str = (
         f"INVESTIGATORS:\n{pack.get('investigators_text')}\n\n"
-        f"KNOWN NPCs:\n{pack.get('npcs_text')}\n\n"
+        f"MET NPCs (only these have been introduced — DO NOT reference others):\n"
+        + "\n".join(met_npcs) + "\n\n"
         f"CURRENT LOCATION:\n{pack.get('location_text')}\n\n"
         f"PLOT THREADS:\n{pack.get('threads_text')}\n\n"
         f"DISCOVERED CLUES:\n{pack.get('clues_text')}"
     )
 
     # 5. Invoke LLM
-    llm = OllamaLLM(
-        model="gemma3:27b",
-        base_url="http://localhost:11434",
-        temperature=req.temperature,
-        num_ctx=req.num_ctx,
-        # keep_alive=0, 
-    )
+    llm = get_llm(temperature=req.temperature)
     chain = PromptTemplate.from_template(read_prompt("keeper_chat.txt")) | llm
     
     # Send to LLM
@@ -503,7 +513,7 @@ DO NOT fall back to generic 1920s tropes. USE the setting, hook, NPCs, and threa
             "- Output ONLY the final prompt, nothing else\n\n"
             "NARRATIVE:\n{narrative}\n\nPROMPT:"
         )
-        llm = OllamaLLM(model="gemma3:27b", base_url="http://localhost:11434", temperature=0.3)
+        llm = get_llm(temperature=0.3)
         raw = (tpl | llm).invoke({
             "narrative": narrative, "era": era, "setting": setting,
             "visual_history": visual_history or "No previous scenes yet.",
@@ -613,6 +623,14 @@ DO NOT fall back to generic 1920s tropes. USE the setting, hook, NPCs, and threa
                         "status": status
                     }
                     db.log_event("STATE_UPDATE", changes)
+                    # Return absolute values so frontend can SET instead of delta-apply
+                    result["updated_actor"] = {
+                        "name": target["name"],
+                        "hp": new_hp,
+                        "san": new_san,
+                        "mp": new_mp,
+                        "status": status,
+                    }
 
                 # Inventory
                 if item_add := state_updates.get("inventory_add", ""):
@@ -725,9 +743,20 @@ async def stream_chat_logic(req: ChatRequest):
         context_str += "\n\n".join([doc.page_content for doc in all_docs])
 
     pack = db.build_prompt_state_pack()
+    # Only surface NPCs the Keeper has already narrated — prevents blueprint leaking names
+    all_chat = " ".join(
+        e.get("payload", {}).get("content", "")
+        for e in db.list_events(limit=60)
+        if e.get("event_type") == "CHAT" and e.get("payload", {}).get("role") == "Keeper"
+    ).lower()
+    met_npcs = [
+        line for line in (pack.get('npcs_text') or '').splitlines()
+        if any(word.lower() in all_chat for word in line.split() if len(word) > 4)
+    ] or ["(none yet)"]
     state_str = (
         f"INVESTIGATORS:\n{pack.get('investigators_text')}\n\n"
-        f"KNOWN NPCs:\n{pack.get('npcs_text')}\n\n"
+        f"MET NPCs (only these have been introduced — DO NOT reference others):\n"
+        + "\n".join(met_npcs) + "\n\n"
         f"CURRENT LOCATION:\n{pack.get('location_text')}\n\n"
         f"PLOT THREADS:\n{pack.get('threads_text')}\n\n"
         f"DISCOVERED CLUES:\n{pack.get('clues_text')}"
@@ -758,12 +787,7 @@ async def stream_chat_logic(req: ChatRequest):
             )
 
     # ── Stream tokens from LLM ───────────────────────────────────────────────
-    llm = OllamaLLM(
-        model="gemma3:27b",
-        base_url="http://localhost:11434",
-        temperature=req.temperature,
-        num_ctx=req.num_ctx,
-    )
+    llm = get_llm(temperature=req.temperature)
     chain = PromptTemplate.from_template(read_prompt("keeper_chat.txt")) | llm
 
     prompt_vars = {
@@ -778,15 +802,11 @@ async def stream_chat_logic(req: ChatRequest):
     full_text = ""
     async for chunk in chain.astream(prompt_vars):
         full_text += chunk
-        # Yield only the narrative portion as it streams.
-        # Extract text inside "narrative": "..." if we can, else just stream raw.
-        # We stream the raw token — frontend will strip JSON wrapper from display.
         yield f"data: {_json.dumps({'type': 'token', 'text': chunk}, ensure_ascii=False)}\n\n"
 
     # ── Post-stream: parse full JSON, apply state, fire image gen ────────────
     result = extract_json(full_text)
 
-    # Image generation (background task)
     from pathlib import Path as _Path
     _REQUEST_BODY_PATH = _Path(__file__).resolve().parent.parent / "img_gen" / "request_body.json"
 
@@ -810,7 +830,6 @@ async def stream_chat_logic(req: ChatRequest):
                 rows = _cur.fetchall()
                 if rows:
                     char_visuals = "ESTABLISHED CHARACTERS:\n" + "\n".join(f"- {r['value']}" for r in rows)
-            # Use inline build here to avoid circular import with helpers
             from utils.helpers import build_scene_prompt
             scene_prompt = build_scene_prompt(narrative, era=era, setting=setting,
                                               visual_history=visual_history, char_visuals=char_visuals)
@@ -825,7 +844,6 @@ async def stream_chat_logic(req: ChatRequest):
 
     asyncio.create_task(_generate_image_bg(gen_id, result.get("narrative", ""), setting_override, era_override))
 
-    # Log and state updates
     db.log_event("CHAT", {"role": "Keeper", "content": result.get("narrative", "")})
 
     cur.execute("SELECT value FROM kv_store WHERE key='turn_count'")
@@ -852,6 +870,14 @@ async def stream_chat_logic(req: ChatRequest):
                     db.upsert_actor(actor_id=target["id"], kind=target["kind"], name=target["name"],
                                     hp=new_hp, san=new_san, mp=new_mp, status=status)
                     db.log_event("STATE_UPDATE", {"actor": target["name"], "status": status})
+                    # Return absolute values so frontend can SET instead of delta-apply
+                    result["updated_actor"] = {
+                        "name": target["name"],
+                        "hp": new_hp,
+                        "san": new_san,
+                        "mp": new_mp,
+                        "status": status,
+                    }
                 if item_add := state_updates.get("inventory_add", ""):
                     db.upsert_clue(title=item_add, content=f"Carried by {target['name']}", status="found")
                 if item_remove := state_updates.get("inventory_remove", ""):
@@ -883,6 +909,4 @@ async def stream_chat_logic(req: ChatRequest):
                                  max_progress=match["max_progress"], stakes=match.get("stakes", ""))
                 db.log_event("THREAD_PROGRESS", {"thread": match["name"]})
 
-    # Final event with complete parsed payload
     yield f"data: {_json.dumps({'type': 'done', 'payload': result}, ensure_ascii=False)}\n\n"
-    

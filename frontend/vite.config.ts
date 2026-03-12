@@ -8,10 +8,12 @@ export default defineConfig(({ mode }) => {
 
   const fePort = parseInt(env.VITE_FE_PORT || '3000', 10);
   const bePort = parseInt(env.VITE_BE_PORT || '8000', 10);
-  const beHost = env.BE_HOST || '127.0.0.1';
+  const beHost = env.BE_PROXY_HOST || '127.0.0.1';
 
   return {
     server: {
+      // allowedHosts: ['attempts-adjustable-depot-operate.trycloudflare.com'],
+      allowedHosts: ['unsimplified-dishonourably-maye.ngrok-free.dev'],
       port: fePort,
       host: '0.0.0.0',   // bind to all interfaces so LAN clients can reach it
       proxy: {
@@ -20,6 +22,11 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: false,
         },
+        '/static': {          
+        target: `http://${beHost}:${bePort}`,
+        changeOrigin: true,
+        secure: false,
+      },
       },
     },
     plugins: [react()],

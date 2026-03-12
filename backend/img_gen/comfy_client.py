@@ -1,7 +1,7 @@
 import json
 import os
 from pathlib import Path
-
+import uuid
 import requests
 from dotenv import load_dotenv
 
@@ -10,7 +10,8 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 BASE_DIR = Path(__file__).resolve().parent
 BASE_URL = os.getenv("COMFY_TUNNEL_URL", "https://your-tunnel.trycloudflare.com")
-
+STATIC_IMAGES_DIR = Path(__file__).resolve().parents[2] / "backend" / "static" / "images"
+STATIC_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 class ComfyClient:
     def __init__(self, base_url: str, timeout: int = 300):
@@ -39,14 +40,15 @@ class ComfyClient:
         img = requests.get(image_url, timeout=self.timeout)
         img.raise_for_status()
 
-        out_path = BASE_DIR / Path(out_path)
-        out_path.write_bytes(img.content)
+        filename = f"{uuid.uuid4().hex}.png"
+        save_path = STATIC_IMAGES_DIR / filename
+        save_path.write_bytes(img.content)
 
         return {
             "prompt_id": data["prompt_id"],
             "client_id": data["client_id"],
-            "image_url": image_url,
-            "saved_file": str(out_path.resolve()),
+            "image_url": f"/static/images/{filename}",  # ← local, not Cloudflare
+            "saved_file": str(save_path.resolve()),
             "image": data["image"],
         }
 
