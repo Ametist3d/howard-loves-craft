@@ -1,9 +1,16 @@
 import json
+import os
 from pathlib import Path
+
 import requests
+from dotenv import load_dotenv
+
+# Load .env from project root (two levels up from backend/img_gen/)
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 BASE_DIR = Path(__file__).resolve().parent
-BASE_URL = "https://jacksonville-arms-latest-johnson.trycloudflare.com"
+BASE_URL = os.getenv("COMFY_TUNNEL_URL", "https://your-tunnel.trycloudflare.com")
+
 
 class ComfyClient:
     def __init__(self, base_url: str, timeout: int = 300):
@@ -31,10 +38,8 @@ class ComfyClient:
         image_url = data["image_url"]
         img = requests.get(image_url, timeout=self.timeout)
         img.raise_for_status()
-        
-        out_path = Path(out_path)
 
-        out_path = BASE_DIR / out_path
+        out_path = BASE_DIR / Path(out_path)
         out_path.write_bytes(img.content)
 
         return {
@@ -48,6 +53,5 @@ class ComfyClient:
 
 if __name__ == "__main__":
     client = ComfyClient(BASE_URL)
-
     result = client.generate_from_file("request_body.json", "result.png")
     print(json.dumps(result, ensure_ascii=False, indent=2))
