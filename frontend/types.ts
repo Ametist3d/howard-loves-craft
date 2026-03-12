@@ -1,5 +1,11 @@
 export type Language = 'en' | 'ru';
 
+export interface PrebuiltScenario {
+  id: string;
+  title: string;
+  content: string;
+}
+
 export interface Attribute {
   current: number;
   max: number;
@@ -46,7 +52,10 @@ export interface Investigator {
   background: string;
   physical_description: string;
   avatarUrl?: string;
+  status?: 'ok' | 'injured' | 'dead' | 'insane';
 }
+
+export type InvestigatorConfig = Pick<Investigator, 'id' | 'name' | 'occupation' | 'background'> & { id: number };
 
 export enum MessageSender {
   SYSTEM = 'system',
@@ -75,6 +84,8 @@ export interface GameState {
   investigators: Investigator[];
   scenarioTitle: string;
   language: Language;
+  prebuiltScenario?: PrebuiltScenario | null;
+  llmProvider: 'ollama' | 'openai';
   settings: AppSettings;
 }
 
@@ -93,5 +104,11 @@ export interface ChatResponse {
   };
   image_url?: string;
   generation_id?: string;
+  updated_actor?: {
+    name: string;
+    hp: number;
+    san: number;
+    mp: number;
+    status: string;
+  };
 }
-

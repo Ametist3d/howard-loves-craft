@@ -24,6 +24,14 @@ export class ApiService {
     }
   }
 
+  public async setLlmProvider(provider: 'ollama' | 'openai'): Promise<void> {
+    await fetch(`${API_BASE}/set-provider`, {
+      method: 'POST',
+      headers: this.authHeaders(),
+      body: JSON.stringify({ provider }),
+    });
+  }
+  
   public async getScenarios(): Promise<{ id: string; title: string; content: string }[]> {
     try {
       const response = await fetch(`${API_BASE}/scenarios`, {

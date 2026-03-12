@@ -5,7 +5,7 @@ import { CharacterSheet } from './components/CharacterSheet';
 import { DiceRoller } from './components/DiceRoller';
 import { SettingsModal } from './components/SettingsModal';
 import { AppSettings } from './types';
-import { GameState, ChatMessage, MessageSender, Language, ChatResponse } from './types';
+import { GameState, ChatMessage, MessageSender, Language, ChatResponse, PrebuiltScenario, InvestigatorConfig } from './types';
 import { apiService } from './services/apiService';
 import { SCENARIO_SEEDS } from './data/scenarios';
 import { AuthScreen } from './components/AuthScreen';
@@ -15,6 +15,7 @@ const INITIAL_STATE: GameState = {
   investigators: [],
   scenarioTitle: '',
   language: 'ru',
+  llmProvider: 'ollama',
   settings: {
     ragEnabled: true,
     topK: 2,
@@ -46,13 +47,28 @@ function App() {
     return newMsg.id;
   };
 
-  const handleStateUpdate = useCallback((args: any) => {
-    if (!args || !args.character_name) return;
+  const handleStateUpdate = useCallback((response: any) => {
+    // Accept either a raw state_updates object or a full response with updated_actor.
+    // updated_actor carries ABSOLUTE values from the backend (idempotent — safe to call twice).
+    // Falls back to delta-apply only for luck (never tracked server-side).
+    const updates = response?.state_updates ?? response;
+    const absolute = response?.updated_actor;
+
+    if (!updates && !absolute) return;
+    const targetName = (absolute?.name ?? updates?.character_name ?? "").toLowerCase();
+    if (!targetName) return;
+
+    // Collect display labels BEFORE entering the state updater (no side-effects inside updater)
+    const labels: string[] = [];
+    if (absolute) {
+      // We know the absolute new values — build labels from state_updates deltas for display
+      if (updates?.hp_change)     labels.push(`HP ${updates.hp_change > 0 ? '+' : ''}${updates.hp_change}`);
+      if (updates?.sanity_change) labels.push(`SAN ${updates.sanity_change > 0 ? '+' : ''}${updates.sanity_change}`);
+      if (updates?.mp_change)     labels.push(`MP ${updates.mp_change > 0 ? '+' : ''}${updates.mp_change}`);
+    }
 
     setGameState((prev) => {
       if (prev.investigators.length === 0) return prev;
-      const targetName = args.character_name.toLowerCase();
-
       const index = prev.investigators.findIndex(inv =>
         inv.name.toLowerCase().includes(targetName) || targetName.includes(inv.name.toLowerCase())
       );
@@ -62,28 +78,39 @@ function App() {
       const inv = { ...updatedInvestigators[index] };
       const attr = { ...inv.attributes };
 
-      if (args.hp_change)      attr.HP.current          = Math.min(attr.HP.max,          Math.max(0, attr.HP.current          + args.hp_change));
-      if (args.sanity_change)  attr.Sanity.current      = Math.min(attr.Sanity.max,       Math.max(0, attr.Sanity.current      + args.sanity_change));
-      if (args.mp_change)      attr.MagicPoints.current = Math.min(attr.MagicPoints.max,  Math.max(0, attr.MagicPoints.current + args.mp_change));
-      if (args.luck_change)    attr.Luck.current        = Math.min(attr.Luck.max,         Math.max(0, attr.Luck.current        + args.luck_change));
+      if (absolute) {
+        // ✅ SET absolute values from backend — idempotent, no double-apply possible
+        if (absolute.hp  !== undefined) attr.HP.current          = Math.min(attr.HP.max,         Math.max(0, absolute.hp));
+        if (absolute.san !== undefined) attr.Sanity.current      = Math.min(attr.Sanity.max,      Math.max(0, absolute.san));
+        if (absolute.mp  !== undefined) attr.MagicPoints.current = Math.min(attr.MagicPoints.max, Math.max(0, absolute.mp));
+      } else if (updates) {
+        // Fallback delta-apply (only reached when backend sends no updated_actor, e.g. luck)
+        if (updates.luck_change) attr.Luck.current = Math.min(attr.Luck.max, Math.max(0, attr.Luck.current + updates.luck_change));
+      }
 
       let inventory = [...inv.inventory];
-      if (args.inventory_add) inventory.push(args.inventory_add);
-      if (args.inventory_remove) {
-        const idx = inventory.findIndex(i => i.toLowerCase().includes(args.inventory_remove.toLowerCase()));
+      if (updates?.inventory_add) inventory.push(updates.inventory_add);
+      if (updates?.inventory_remove) {
+        const idx = inventory.findIndex(i => i.toLowerCase().includes(updates.inventory_remove.toLowerCase()));
         if (idx > -1) inventory.splice(idx, 1);
       }
 
-      let updates: string[] = [];
-      if (args.hp_change)     updates.push(`HP ${args.hp_change > 0 ? '+' : ''}${args.hp_change}`);
-      if (args.sanity_change) updates.push(`SAN ${args.sanity_change > 0 ? '+' : ''}${args.sanity_change}`);
-      if (updates.length > 0) {
-        addMessage(MessageSender.SYSTEM, `[${inv.name}: ${updates.join(', ')}]`);
-      }
-
-      updatedInvestigators[index] = { ...inv, attributes: attr, inventory };
+      updatedInvestigators[index] = { ...inv, attributes: attr, inventory,
+        status: absolute?.status ?? inv.status };
       return { ...prev, investigators: updatedInvestigators };
     });
+
+    // Side-effects OUTSIDE the state updater (React StrictMode safe)
+    if (labels.length > 0) {
+      addMessage(MessageSender.SYSTEM, `[${targetName}: ${labels.join(', ')}]`);
+    }
+    if (absolute?.status === 'dead') {
+      addMessage(MessageSender.SYSTEM,
+        `💀 ${absolute.name} погиб. Их история на этом заканчивается.`);
+    } else if (absolute?.status === 'insane') {
+      addMessage(MessageSender.SYSTEM,
+        `🌀 ${absolute.name} сошёл с ума. Рассудок покинул их навсегда.`);
+    }
   }, []);
 
   const processAiResponse = async (response: ChatResponse) => {
@@ -100,26 +127,28 @@ function App() {
     }]);
 
     setSuggestedActions(response.suggested_actions || []);
-    if (response.state_updates) handleStateUpdate(response.state_updates);
+    if (response.state_updates || response.updated_actor) handleStateUpdate(response);
 
-    // 2. Poll for image in background — doesn't block anything
+    // 2. Poll for image — fully detached, input is unblocked immediately
     if (response.generation_id) {
-      const imageUrl = await apiService.pollImageStatus(response.generation_id);
-      setMessages((prev) => prev.map((m) =>
-        m.id === msgId
-          ? { ...m, image: imageUrl || undefined, imageGenerating: false }
-          : m
-      ));
+      apiService.pollImageStatus(response.generation_id).then(imageUrl => {
+        setMessages((prev) => prev.map((m) =>
+          m.id === msgId
+            ? { ...m, image: imageUrl || undefined, imageGenerating: false }
+            : m
+        ));
+      });
     }
   };
 
   const handleStartGame = async (config: {
-    investigators: any[];
+    investigators: InvestigatorConfig[];
     scenario: 'prebuilt' | 'random' | 'custom';
     customPrompt: string;
     themes?: string[];
     language: Language;
-    prebuiltScenario?: { id: string; title: string; content: string } | null;
+    prebuiltScenario?: PrebuiltScenario | null;
+    llmProvider: 'ollama' | 'openai';
   }) => {
     setIsLoading(true);
     try {
@@ -161,7 +190,7 @@ function App() {
         scenarioTitle,
         language: config.language
       }));
-
+      await apiService.setLlmProvider(config.llmProvider);
       // 3. Start session — pass resolved era + seed to backend
       const result = await apiService.startSession(
         generatedInvestigators,
@@ -220,6 +249,17 @@ function App() {
       return;
     }
 
+    const allDead = gameState.investigators.length > 0 &&
+      gameState.investigators.every(inv =>
+        inv.status === 'dead' || inv.attributes.HP.current === 0
+      );
+    if (allDead) {
+      addMessage(MessageSender.SYSTEM,
+        '💀 Все следователи мертвы. Игра окончена.');
+      setIsLoading(false);
+      return;
+    }
+
     // Create a placeholder Keeper message that we'll fill in token by token
     const msgId = Date.now().toString() + Math.random();
     setMessages(prev => [...prev, {
@@ -249,13 +289,14 @@ function App() {
             : m
         ));
         setSuggestedActions(result.suggested_actions || []);
-        if (result.state_updates) handleStateUpdate(result.state_updates);
-        // Poll for image if one was queued
+        if (result.state_updates || result.updated_actor) handleStateUpdate(result);
+        // Poll for image — detached, does not block input
         if (result.generation_id) {
-          const imageUrl = await apiService.pollImageStatus(result.generation_id);
-          setMessages(prev => prev.map(m =>
-            m.id === msgId ? { ...m, image: imageUrl || undefined, imageGenerating: false } : m
-          ));
+          apiService.pollImageStatus(result.generation_id).then(imageUrl => {
+            setMessages(prev => prev.map(m =>
+              m.id === msgId ? { ...m, image: imageUrl || undefined, imageGenerating: false } : m
+            ));
+          });
         }
       },
       // onError

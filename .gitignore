@@ -11,6 +11,7 @@ sessions/
 *.pyo
 .env
 *.env.local
+*.exe
 
 #DataBase
 *.sqlite

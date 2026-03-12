@@ -1,14 +1,17 @@
 import os
 import secrets
 import logging
+import httpx
 from collections import defaultdict
 from pathlib import Path
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # Load .env from project root (two levels up from backend/)
@@ -25,7 +28,7 @@ from utils.engine import (
 )
 
 # ─── Config from .env ────────────────────────────────────────────────────────
-BE_HOST = os.getenv("BE_HOST", "127.0.0.1")
+BE_HOST = os.getenv("BE_HOST", "0.0.0.0")
 BE_PORT = int(os.getenv("BE_PORT", "8000"))
 AUTH_USERNAME = os.getenv("AUTH_USERNAME", "keeper")
 AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "change_me_please")
@@ -48,6 +51,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+_static_dir = Path(__file__).resolve().parent / "static"
+_static_dir.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 # ─── Auth helpers ─────────────────────────────────────────────────────────────
 
@@ -85,7 +92,7 @@ async def logout(request: Request):
 
 
 # ─── Protected routes ─────────────────────────────────────────────────────────
-
+    
 @app.post("/api/generate-avatar", dependencies=[Depends(_verify_token)])
 async def generate_avatar(req: AvatarRequest):
     try:
@@ -94,7 +101,7 @@ async def generate_avatar(req: AvatarRequest):
         logger.error(f"Avatar Generation Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/image-status/{generation_id}", dependencies=[Depends(_verify_token)])
+@app.get("/api/image-status/{generation_id}")
 async def image_status(generation_id: str):
     status = _image_results.get(generation_id)
     if status is None and generation_id not in _image_results:
@@ -207,6 +214,16 @@ async def chat(req: ChatRequest):
             "state_updates": None,
         }
 
+class ProviderRequest(BaseModel):
+    provider: str  # "ollama" | "openai"
+
+@app.post("/api/set-provider", dependencies=[Depends(_verify_token)])
+async def set_provider(req: ProviderRequest):
+    if req.provider not in ("ollama", "openai"):
+        raise HTTPException(status_code=400, detail="provider must be 'ollama' or 'openai'")
+    os.environ["LLM_PROVIDER"] = req.provider
+    logger.info(f"LLM provider switched to: {req.provider}")
+    return {"ok": True, "provider": req.provider}
 
 # ─── Entrypoint ───────────────────────────────────────────────────────────────
 
@@ -214,4 +231,3 @@ if __name__ == "__main__":
     import uvicorn
     logger.info(f"Starting Keeper AI on {BE_HOST}:{BE_PORT}")
     uvicorn.run("main:app", host=BE_HOST, port=BE_PORT, reload=True)
-    
