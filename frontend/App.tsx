@@ -393,26 +393,45 @@ Continue from exactly where the scene context left off.`;
     s.toLowerCase().includes('roll') || s.toLowerCase().includes('check') || s.toLowerCase().includes('d100')
   );
 
-  let detectedSkillTarget: { investigatorName: string; skillName: string } | null = null;
-  const lastMessage = messages[messages.length - 1];
+  // ── Auto-skill detection: either from clicked Roll action or from last message ──
+  const [autoSkill, setAutoSkill] = useState<{ investigatorName: string; skillName: string } | null>(null);
 
-  if (lastMessage && lastMessage.sender === MessageSender.KEEPER && gameState.investigators.length > 0) {
-    const textToCheck = (lastMessage.content + ' ' + suggestedActions.join(' ')).toLowerCase();
+  // Reset autoSkill when a new Keeper message arrives
+  const lastKeeperMsg = [...messages].filter(m => m.sender === MessageSender.KEEPER).pop();
+  const lastKeeperMsgId = lastKeeperMsg?.id;
+  React.useEffect(() => { setAutoSkill(null); }, [lastKeeperMsgId]);
 
+  // Helper: given a skill name string from the LLM, find best investigator + matched skill
+  const resolveSkillTarget = (rawSkill: string): { investigatorName: string; skillName: string } | null => {
+    if (!rawSkill || gameState.investigators.length === 0) return null;
+    const search = rawSkill.toLowerCase().trim();
+    let best: { investigatorName: string; skillName: string; value: number } | null = null;
+    for (const inv of gameState.investigators) {
+      const match = inv.skills.find(s =>
+        s.name.toLowerCase() === search ||
+        s.name.toLowerCase().includes(search) ||
+        search.includes(s.name.toLowerCase())
+      );
+      if (match && (!best || match.value > best.value)) {
+        best = { investigatorName: inv.name, skillName: match.name, value: match.value };
+      }
+    }
+    return best ? { investigatorName: best.investigatorName, skillName: best.skillName } : null;
+  };
+
+  // Passive detection from last message (existing behaviour)
+  const detectedSkillTarget: { investigatorName: string; skillName: string } | null = (() => {
+    if (autoSkill) return autoSkill; // explicit click wins
+    if (!lastKeeperMsg || gameState.investigators.length === 0) return null;
+    const textToCheck = (lastKeeperMsg.content + ' ' + suggestedActions.join(' ')).toLowerCase();
     let targetInvestigator = gameState.investigators[0];
     const foundInv = gameState.investigators.find(inv => textToCheck.includes(inv.name.toLowerCase()));
     if (foundInv) targetInvestigator = foundInv;
-
-    if (targetInvestigator) {
-      // Search against the actual character's skill list — catches custom skills too
-      const foundSkill = targetInvestigator.skills.find(s =>
-        s.name.length > 2 && textToCheck.includes(s.name.toLowerCase())
-      );
-      if (foundSkill) {
-        detectedSkillTarget = { investigatorName: targetInvestigator.name, skillName: foundSkill.name };
-      }
-    }
-  }
+    const foundSkill = targetInvestigator.skills.find(s =>
+      s.name.length > 2 && textToCheck.includes(s.name.toLowerCase())
+    );
+    return foundSkill ? { investigatorName: targetInvestigator.name, skillName: foundSkill.name } : null;
+  })();
 
   
   if (!authToken) {
@@ -476,7 +495,22 @@ Continue from exactly where the scene context left off.`;
                 {suggestedActions.map((action, idx) => (
                   <button
                     key={idx}
-                    onClick={() => handleSend(undefined, action)}
+                    onClick={() => {
+                      // Check if this action requires a roll
+                      const rollMatch = action.match(/→\s*Roll\s+(.+)$/i);
+                      if (rollMatch) {
+                        const skillRaw = rollMatch[1].trim();
+                        const resolved = resolveSkillTarget(skillRaw);
+                        if (resolved) {
+                          setAutoSkill(resolved);
+                          // Send the action text minus the roll instruction — just the narrative intent
+                          const actionText = action.replace(/→\s*Roll\s+.+$/i, '').trim();
+                          handleSend(undefined, actionText || action);
+                          return;
+                        }
+                      }
+                      handleSend(undefined, action);
+                    }}
                     disabled={isLoading}
                     className="bg-gray-800 hover:bg-cthulhu-700 disabled:opacity-50 text-xs md:text-sm text-gray-300 px-3 py-1 rounded-full border border-gray-600 transition-colors"
                   >

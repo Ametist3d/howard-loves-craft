@@ -10,11 +10,12 @@ from langchain_core.prompts import PromptTemplate
 
 from utils.db_session import SessionDB, create_session_db_file
 from utils.schemas import CharGenRequest, StartSessionRequest, ChatRequest
-from utils.helpers import read_prompt, extract_json, get_chat_history, get_llm 
+from utils.helpers import read_prompt, extract_json, get_chat_history, get_llm, compress_story, build_scene_prompt, generate_avatar_logic, apply_state_updates
 
 logger = logging.getLogger("keeper_ai.engine")
 
 from img_gen.comfy_client import BASE_URL as _COMFY_BASE_URL
+
 
 # _COMFY_BASE_URL = "https://jacksonville-arms-latest-johnson.trycloudflare.com"  # update as needed
 # _COMFY_BASE_URL = "https://provided-feeds-pipe-avatar.trycloudflare.com"  # update as needed
@@ -24,6 +25,14 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _BACKEND_DIR = os.path.dirname(BASE_DIR)
 DATA_DIR = os.path.join(_BACKEND_DIR, "data")
 SESSIONS_DIR = os.path.join(DATA_DIR, "sessions")
+
+import datetime
+_DEBUG_LOG = os.path.join(DATA_DIR, "prebuilt_debug.log")
+
+def _dbg(tag: str, content: str):
+    ts = datetime.datetime.now().strftime("%H:%M:%S")
+    with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
+        f.write(f"\n{'='*60}\n[{ts}] {tag}\n{'='*60}\n{content}\n")
 
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 
@@ -54,60 +63,9 @@ async def generate_character_logic(req: CharGenRequest) -> dict:
     })
     return extract_json(response_text)
 
-async def _compress_story(db: SessionDB):
-    """Compress story history into a rolling digest stored in kv_store."""
-    try:
-        # Pull last 30 chat events for compression
-        all_events = db.list_events(limit=60)
-        chat_lines = []
-        for e in all_events:
-            if e.get("event_type") == "CHAT":
-                p = e.get("payload", {})
-                chat_lines.append(f"{p.get('role','?').upper()}: {p.get('content','')}")
-        
-        if len(chat_lines) < 4:
-            return  # Not enough to compress yet
-        
-        full_history = "\n\n".join(chat_lines)
-        
-        cur = db.conn.cursor()
-        cur.execute("SELECT value FROM kv_store WHERE key='story_digest'")
-        prev = cur.fetchone()
-        prev_digest = prev["value"] if prev else "(none yet)"
-        
-        cur.execute("SELECT value FROM kv_store WHERE key='language'")
-        row = cur.fetchone()
-        lang = row["value"] if row else "ru"
-        
-        compression_prompt = f"""You are a scribe summarizing a Call of Cthulhu session for continuity.
-Language: {lang}. Write the digest in this language.
-
-PREVIOUS DIGEST (events before this batch):
-{prev_digest}
-
-RECENT SESSION EXCHANGES:
-{full_history[-6000:]}
-
-Write a STORY DIGEST — a compact, factual record of what has happened in this session.
-Format: numbered bullet points, past tense.
-Cover: locations visited, NPCs encountered (what was learned from/about them), clues found, 
-player decisions and their outcomes, plot threads advanced, any deaths/san loss/injuries.
-DO NOT speculate. Only record what actually happened in the exchanges above.
-Maximum 220 words. No preamble. Start directly with "1."
-DIGEST:"""
-
-        compress_llm = get_llm(temperature=0.2)
-        digest = compress_llm.invoke(compression_prompt).strip()
-        
-        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('story_digest', ?)", (digest,))
-        db.conn.commit()
-        logger.info(f"Story digest compressed: {len(digest)} chars")
-    except Exception as e:
-        logger.warning(f"Story compression failed: {e}")
-
 async def start_session_logic(req: StartSessionRequest) -> dict:
     session_id = "local_session"
-    
+
     # 1. Format the setting string
     themes_str = ', '.join(req.themes).upper() if req.themes else "STANDARD"
     era_context = req.era_context or "Cosmic Horror — derive era and aesthetics from the scenario atoms."
@@ -117,7 +75,7 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
         query_text = req.customPrompt
     elif req.scenarioType == 'prebuilt' and req.picked_seed:
         setting_desc = f"Prebuilt: {req.picked_seed[:50]}..."
-        query_text = req.picked_seed          # full scenario text → sharp RAG
+        query_text = req.picked_seed
         era_context = req.era_context or era_context
     elif req.picked_seed:
         setting_desc = f"Themes: {themes_str}"
@@ -129,14 +87,12 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
     info = create_session_db_file(SESSIONS_DIR, "Call of Cthulhu", setting_desc)
     db = SessionDB(info.db_path)
     active_dbs[session_id] = db
-    
     logger.info(f"Created new unique session DB: {info.db_path}")
 
     # 2. Insert Investigators
     for inv in req.investigators:
         chars = inv.get("characteristics", {})
         attrs = inv.get("attributes", {})
-        
         aid = db.upsert_actor(
             kind="PC",
             name=inv.get("name", "Unknown"),
@@ -153,27 +109,116 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
         )
         for skill in inv.get("skills", []):
             db.set_skill(aid, skill["name"], skill["value"])
-            
         db.log_event("SYS_INIT", {"note": f"Character {inv.get('name')} registered."})
 
-    # 3. PROACTIVE RAG: Pull Scenario Atoms, SYNTHESIZE a blueprint, then SAVE TO DB
+    # 3. Build scenario blueprint
     scenario_atoms_text = ""
-    if scen_db:
+    blueprint = {}
+    lang = req.language if hasattr(req, 'language') else 'ru'
+
+    if req.scenarioType == 'prebuilt' and req.picked_seed:
+        # ── PREBUILT PATH ──────────────────────────────────────────────────────
+        logger.info("Prebuilt scenario selected — extracting blueprint from source content.")
+        scenario_source_text = req.picked_seed
+
+        extract_prompt = (
+            "You are a Call of Cthulhu scenario analyst. "
+            "Below is the full text of a published scenario. "
+            "Extract its structure into JSON. Do NOT invent anything — only use what is in the text.\n\n"
+            "SCENARIO TEXT:\n"
+            f"{scenario_source_text[:6000]}\n\n"
+            "Return ONLY a JSON object with these keys:\n"
+            "  title (str), era_and_setting (str), inciting_hook (str), core_mystery (str),\n"
+            "  key_npc (str), hidden_threat (str), atmosphere_notes (str),\n"
+            "  plot_twists (list[str]),\n"
+            "  locations (list of {name, description, tags}),\n"
+            "  npcs (list of {name, description, role, secret}),\n"
+            "  clues (list of {title, content, location}),\n"
+            "  plot_threads (list of {name, stakes, steps})\n"
+            "JSON:"
+        )
+        try:
+            extract_llm = get_llm(temperature=0.1)
+            extract_raw = extract_llm.invoke(extract_prompt)
+            _dbg("EXTRACT PROMPT", extract_prompt[:2000])
+            _dbg("EXTRACT RAW RESPONSE", str(extract_raw))
+            logger.info(f"[PREBUILT] Raw extract response (first 300): {str(extract_raw)[:300]}")
+            blueprint = extract_json(extract_raw)
+            logger.info(f"[PREBUILT] blueprint keys={list(blueprint.keys()) if isinstance(blueprint, dict) else 'NOT A DICT'}")
+
+            scenario_atoms_text = (
+                f"SCENARIO TITLE: {blueprint.get('title', 'Unknown')}\n"
+                f"SETTING: {blueprint.get('era_and_setting', '')}\n"
+                f"HOOK: {blueprint.get('inciting_hook', '')}\n"
+                f"CORE MYSTERY: {blueprint.get('core_mystery', '')}\n"
+                f"KEY NPC: {blueprint.get('key_npc', '')}\n"
+                f"HIDDEN THREAT: {blueprint.get('hidden_threat', '')}\n"
+                f"PLOT TWISTS: {' | '.join(blueprint.get('plot_twists', []))}\n"
+                f"ATMOSPHERE: {blueprint.get('atmosphere_notes', '')}"
+            )
+            logger.info(f"Prebuilt blueprint extracted: {blueprint.get('title', '?')}")
+
+            if lang == 'ru':
+                logger.info(f"[PREBUILT] Translating atoms to Russian...")
+                translate_prompt = (
+                    "Translate the following text into Russian. "
+                    "Do NOT translate proper nouns (person names, place names, ship names, artifact names). "
+                    "Output ONLY the translated text, nothing else:\n\n"
+                    f"{scenario_atoms_text}"
+                )
+                try:
+                    translated_atoms = get_llm(temperature=0.1).invoke(translate_prompt).strip()
+                    _dbg("TRANSLATE PROMPT", translate_prompt)
+                    _dbg("TRANSLATE RAW RESPONSE", translated_atoms)
+                    if translated_atoms:
+                        scenario_atoms_text = translated_atoms
+                    logger.info(f"[PREBUILT] scenario_atoms_text after translation: {scenario_atoms_text[:200]}")
+                except Exception as te:
+                    logger.warning(f"Atoms translation failed ({te}), keeping English.")
+
+                for loc in blueprint.get('locations', []):
+                    if loc.get('description'):
+                        field_prompt = f"Translate to Russian, keep proper nouns unchanged, output only the translation:\n{loc['description']}"
+                        raw = get_llm(temperature=0.1).invoke(field_prompt).strip()
+                        _dbg(f"FIELD location.description [{loc['name']}]", f"IN: {loc['description']}\nOUT: {raw}")
+                        loc['description'] = raw or loc['description']
+
+                for npc in blueprint.get('npcs', []):
+                    for field in ('description', 'secret'):
+                        if npc.get(field):
+                            field_prompt = f"Translate to Russian, keep proper nouns unchanged, output only the translation:\n{npc[field]}"
+                            raw = get_llm(temperature=0.1).invoke(field_prompt).strip()
+                            _dbg(f"FIELD npc.{field} [{npc['name']}]", f"IN: {npc[field]}\nOUT: {raw}")
+                            npc[field] = raw or npc[field]
+
+                for i, clue in enumerate(blueprint.get('clues', [])):
+                    if clue.get('content'):
+                        field_prompt = f"Translate to Russian, keep proper nouns unchanged, output only the translation:\n{clue['content']}"
+                        raw = get_llm(temperature=0.1).invoke(field_prompt).strip()
+                        _dbg(f"FIELD clue.content [{clue.get('title', i)}]", f"IN: {clue['content']}\nOUT: {raw}")
+                        clue['content'] = raw or clue['content']
+
+                for thread in blueprint.get('plot_threads', []):
+                    if thread.get('stakes'):
+                        field_prompt = f"Translate to Russian, keep proper nouns unchanged, output only the translation:\n{thread['stakes']}"
+                        raw = get_llm(temperature=0.1).invoke(field_prompt).strip()
+                        _dbg(f"FIELD thread.stakes [{thread['name']}]", f"IN: {thread['stakes']}\nOUT: {raw}")
+                        thread['stakes'] = raw or thread['stakes']
+
+        except Exception as e:
+            logger.warning(f"Prebuilt extraction failed ({e}), using raw scenario text.")
+            blueprint = {}
+            scenario_atoms_text = scenario_source_text[:4000]
+
+    elif scen_db:
+        # ── RANDOM / CUSTOM PATH ───────────────────────────────────────────────
         logger.info(f"Querying Scenario DB for starting atoms using: '{query_text}'")
-        # Pull more atoms so synthesis has richer material to remix
-
-
-        # Pull MORE candidates than needed, then randomly sample
-        # This breaks the "same 6 atoms every time" loop
         scen_docs = scen_db.similarity_search(query_text, k=15)
-
-        # Split: 2 closely relevant + 2 randomly picked from the rest + 1 from a DIFFERENT theme
         top_docs = scen_docs[:3]
         remaining = scen_docs[3:]
         random.shuffle(remaining)
         mixed_docs = top_docs + remaining[:2]
 
-        # Cross-pollinate: pull 1 atom from a DIFFERENT theme to force novelty
         anti_queries = [
             "ancient ritual sacrifice temple priests",
             "arctic expedition ice buried city",
@@ -184,20 +229,16 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
         ]
         cross_query = random.choice(anti_queries)
         cross_docs = scen_db.similarity_search(cross_query, k=3)
-        # Pick one that ISN'T already in our set
         existing_contents = {d.page_content for d in mixed_docs}
         cross_pick = next((d for d in cross_docs if d.page_content not in existing_contents), None)
         if cross_pick:
             mixed_docs.append(cross_pick)
-
-        random.shuffle(mixed_docs)  # randomize order so model doesn't privilege first atoms
+        random.shuffle(mixed_docs)
 
         atoms = [f"ATOM {i+1}:\n{doc.page_content.strip()}" for i, doc in enumerate(mixed_docs)]
         raw_atoms_text = "\n\n".join(atoms)
 
-        # --- SYNTHESIS STEP: build a unique scenario blueprint ---
         logger.info("Synthesizing unique scenario blueprint from atoms...")
-        lang = req.language if hasattr(req, 'language') else 'ru'
         try:
             synth_llm = get_llm(temperature=0.9)
             synth_chain = PromptTemplate.from_template(read_prompt("scenario_gen.txt")) | synth_llm
@@ -208,7 +249,6 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
                 "atoms": raw_atoms_text
             })
             blueprint = extract_json(synth_raw)
-            # Serialize blueprint into a readable context block for the Keeper
             scenario_atoms_text = (
                 f"SCENARIO TITLE: {blueprint.get('title', 'Unknown')}\n"
                 f"SETTING: {blueprint.get('era_and_setting', '')}\n"
@@ -222,128 +262,83 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
             logger.info(f"Scenario blueprint synthesized: {blueprint.get('title', '?')}")
         except Exception as e:
             logger.warning(f"Scenario synthesis failed ({e}), falling back to raw atoms.")
+            blueprint = {}
             scenario_atoms_text = raw_atoms_text
-        # ---------------------------------------------------------
 
-        db.log_event("SCENARIO_GENERATED", {"query": query_text})
+    # ── SHARED: save everything to DB — runs for BOTH paths ───────────────────
+    _dbg("FINAL scenario_atoms_text", scenario_atoms_text)
+    _dbg("FINAL blueprint (first 1000)", json.dumps(blueprint, ensure_ascii=False)[:1000])
+    logger.info(f"[SESSION] Final scenario_atoms_text (first 300): {scenario_atoms_text[:300]}")
+    logger.info(f"[SESSION] language being stored: {repr(req.language)}")
 
-        # --- Populate DB tables from blueprint skeleton ---
-        if isinstance(blueprint, dict):
-            # Locations
-            loc_id_map = {}  # name -> id, for clue linking
-            for loc in blueprint.get("locations", []):
-                lid = db.upsert_location(
-                    name=loc.get("name", "Unknown"),
-                    description=loc.get("description", ""),
-                    tags=loc.get("tags", "")
-                )
-                loc_id_map[loc.get("name", "")] = lid
+    db.log_event("SCENARIO_GENERATED", {
+        "query": query_text if req.scenarioType != 'prebuilt' else blueprint.get('title', 'prebuilt')
+    })
 
-            # NPCs
-            for npc in blueprint.get("npcs", []):
-                role = npc.get("role", "neutral")
-                kind = "ENEMY" if "enemy" in role else "NPC"
-                db.upsert_actor(
-                    kind=kind,
-                    name=npc.get("name", "Unknown"),
-                    description=npc.get("description", ""),
-                    notes=npc.get("secret", "")
-                )
+    if isinstance(blueprint, dict) and blueprint:
+        loc_id_map = {}
+        for loc in blueprint.get("locations", []):
+            tags_raw = loc.get("tags", "")
+            tags_str = ", ".join(tags_raw) if isinstance(tags_raw, list) else str(tags_raw or "")
+            lid = db.upsert_location(
+                name=str(loc.get("name", "Unknown")),
+                description=str(loc.get("description", "")),
+                tags=tags_str
+            )
+            loc_id_map[loc.get("name", "")] = lid
 
-            # Clues (hidden by default — Keeper reveals them)
-            for clue in blueprint.get("clues", []):
-                loc_name = clue.get("location", "")
-                db.upsert_clue(
-                    title=clue.get("title", "Clue"),
-                    content=clue.get("content", ""),
-                    status="hidden",
-                    location_id=loc_id_map.get(loc_name)
-                )
+        for npc in blueprint.get("npcs", []):
+            role = str(npc.get("role", "neutral"))
+            kind = "ENEMY" if "enemy" in role else "NPC"
+            db.upsert_actor(
+                kind=kind,
+                name=str(npc.get("name", "Unknown")),
+                description=str(npc.get("description", "")),
+                notes=str(npc.get("secret", ""))
+            )
 
-            # Plot threads
-            for thread in blueprint.get("plot_threads", []):
-                db.upsert_thread(
-                    name=thread.get("name", "Thread"),
-                    stakes=thread.get("stakes", ""),
-                    max_progress=thread.get("steps", 4)
-                )
-        
-        # scenario_setting = blueprint.get('era_and_setting', 'Lovecraftian Horror Arcane Lore for a Call of Cthulhu') if isinstance(blueprint, dict) else 'Lovecraftian Horror Arcane Lore for a Call of Cthulhu'
-        scenario_setting = (
-            blueprint.get('era_and_setting') or era_context
-            if isinstance(blueprint, dict)
-            else era_context
-        )
-        cur = db.conn.cursor()
-        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_atoms', ?)", (scenario_atoms_text,))
-        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_themes', ?)", (themes_str,))
-        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_setting', ?)", (scenario_setting,))
-        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('era_context', ?)", (era_context,))
-        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_source', ?)", (req.picked_seed[:100],))
-        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('language', ?)", (req.language,))
-        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_blueprint_json', ?)", 
-            (json.dumps(blueprint, ensure_ascii=False) if isinstance(blueprint, dict) else "{}",))
-        db.conn.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)", ("scenario_era", era_context))
-        db.conn.commit()
+        for clue in blueprint.get("clues", []):
+            loc_name = clue.get("location", "")
+            db.upsert_clue(
+                title=str(clue.get("title", "Clue")),
+                content=str(clue.get("content", "")),
+                status="hidden",
+                location_id=loc_id_map.get(loc_name)
+            )
 
-        # ── DEBUG: verify what's actually stored ──────────────────────────────────────
-        print(f"==>> [SESSION START] era_context passed in : {repr(req.era_context)}")
-        print(f"==>> [SESSION START] era_context stored    : {repr(era_context)}")
-        print(f"==>> [SESSION START] scenario_setting stored: {repr(scenario_setting)}")
-        print(f"==>> [SESSION START] themes_str            : {repr(themes_str)}")
-        # ─────────────────────────────────────────────────────────────────────────────
+        for thread in blueprint.get("plot_threads", []):
+            steps_raw = thread.get("steps", 4)
+            steps = int(steps_raw) if isinstance(steps_raw, (int, float, str)) else 4
+            db.upsert_thread(
+                name=str(thread.get("name", "Thread")),
+                stakes=str(thread.get("stakes", "")),
+                max_progress=steps
+            )
 
-    # 4. Simple trigger message
+    scenario_setting = str(
+        blueprint.get('era_and_setting') or era_context
+        if isinstance(blueprint, dict)
+        else era_context
+    )
+    cur = db.conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_atoms', ?)", (str(scenario_atoms_text),))
+    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_themes', ?)", (str(themes_str),))
+    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_setting', ?)", (scenario_setting,))
+    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('era_context', ?)", (str(era_context),))
+    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_source', ?)", (str(req.picked_seed[:100]) if req.picked_seed else "",))
+    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('language', ?)", (str(req.language),))
+    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_blueprint_json', ?)",
+        (json.dumps(blueprint, ensure_ascii=False) if isinstance(blueprint, dict) else "{}",))
+    db.conn.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)", ("scenario_era", str(era_context)))
+    db.conn.commit()
+
+    print(f"==>> [SESSION START] era_context stored    : {repr(era_context)}")
+    print(f"==>> [SESSION START] scenario_setting stored: {repr(scenario_setting)}")
+    print(f"==>> [SESSION START] language stored        : {repr(req.language)}")
+
+    # 4. Trigger opening narration
     start_msg = "Начни историю. Опиши стартовую локацию." if req.language == 'ru' else "Start the story. Describe the starting location."
     return await handle_chat_logic(ChatRequest(message=start_msg, session_id=session_id))
-
-
-async def generate_avatar_logic(req) -> dict:
-    from pathlib import Path as _Path
-
-    # _COMFY_BASE_URL = "https://provided-feeds-pipe-avatar.trycloudflare.com"
-    _REQUEST_BODY_PATH = _Path(__file__).resolve().parent.parent / "img_gen" / "request_body.json"
-
-    # Build portrait prompt
-    tpl = PromptTemplate.from_template(
-        "You are a prompt engineer for Flux, a natural-language image model.\n"
-        "Write a portrait prompt for this character. Era/setting: {era}.\n\n"
-        "Character: {occupation}, {description}\n\n"
-        "RULES:\n"
-        "- English only\n"
-        "- 1-2 sentences describing: face and expression, clothing appropriate to the era, posture/mood\n"
-        "- Framing: upper body portrait, neutral or slightly dramatic background\n"
-        "- No character names\n"
-        "- End with exactly: 'Painterly digital illustration, pulp horror aesthetic, dramatic lighting, rich deep colors.'\n"
-        "- Output ONLY the prompt, nothing else\n\n"
-        "PORTRAIT PROMPT:"
-    )
-    llm = get_llm(temperature=0.3)
-    portrait_prompt = (tpl | llm).invoke({
-        "era": req.era_context or "1920s Lovecraftian Horror",
-        "occupation": req.occupation,
-        "description": req.physical_description
-    }).strip()
-    portrait_prompt = " ".join(l.strip() for l in portrait_prompt.splitlines() if l.strip())
-
-    logger.info(f"Avatar prompt for {req.name}: {portrait_prompt}")
-
-    try:
-        from img_gen.comfy_client import ComfyClient
-        _comfy = ComfyClient(_COMFY_BASE_URL)
-        with open(_REQUEST_BODY_PATH, "r", encoding="utf-8") as _f:
-            _body = json.load(_f)
-        _body["params"]["prompt"] = portrait_prompt
-        _body["params"]["width"] = 480
-        _body["params"]["height"] = 640
-        img_result = _comfy.generate(_body)
-        return {
-            "image_url": img_result["image_url"],
-            "portrait_prompt": portrait_prompt
-        }
-    except Exception as e:
-        logger.warning(f"Avatar generation failed for {req.name}: {e}")
-        return {"image_url": None, "portrait_prompt": portrait_prompt}
     
 async def handle_chat_logic(req: ChatRequest) -> dict:
     if req.session_id not in active_dbs:
@@ -477,9 +472,19 @@ DO NOT fall back to generic 1920s tropes. USE the setting, hook, NPCs, and threa
                 + "\n".join(f'- "{s[:80]}"' for s in banned)
             )
     # ────────────────────────────────────────────────────────────────────────────
+    if session_language == "ru":
+        language_instruction = (
+            "РУССКИЙ ЯЗЫК — ОБЯЗАТЕЛЬНО.\n"
+            "Весь текст в \"narrative\" и все элементы \"suggested_actions\" пиши ТОЛЬКО на русском языке.\n"
+            "Ни одного английского слова в значениях JSON. Ключи JSON остаются на английском. Всё остальное — русский."
+        )
+    else:
+        language_instruction = "Write all narrative and suggested_actions in English only."
 
+    print(f"==>> [CHAT] session_language={repr(session_language)}")
+    
     response_text = chain.invoke({
-        "language": session_language,
+        "language": language_instruction,
         "campaign_context": context_str + "\n\n--- CURRENT GAME STATE ---\n" + state_str + verdict_guard,
         "era_context": setting_override,
         "history": get_chat_history(db, limit=15),
@@ -495,31 +500,6 @@ DO NOT fall back to generic 1920s tropes. USE the setting, hook, NPCs, and threa
 
     
     _REQUEST_BODY_PATH = _Path(__file__).resolve().parent.parent / "img_gen" / "request_body.json"
-
-    def _build_scene_prompt(narrative: str, era: str = "", setting: str = "", visual_history: str = "", char_visuals: str = "") -> str:
-        tpl = PromptTemplate.from_template(
-            "You are a prompt engineer for Flux, a natural-language image model. "
-            "Your job is to generate a consistent visual description across a series of scenes.\n\n"
-            "Setting/Era context: {era}, {setting}\n\n"
-            "{char_visuals}\n\n"
-            "PREVIOUS SCENE DESCRIPTIONS (for visual consistency):\n{visual_history}\n\n"
-            "STEP 1 — Read the ENTIRE narrative. Identify the single element that carries the most narrative weight.\n"
-            "STEP 2 — Frame it as a close or medium shot. That element must be the visual centerpiece.\n"
-            "STEP 3 — Write 2-3 short natural sentences. If characters from the established list appear, "
-            "describe them using their established appearance. Match era and setting in every detail.\n"
-            "STEP 4 — Append exactly: 'Painterly digital illustration, pulp horror aesthetic, dramatic lighting, rich deep colors.'\n\n"
-            "RULES:\n"
-            "- English only. No character names. No smell or sound.\n"
-            "- Output ONLY the final prompt, nothing else\n\n"
-            "NARRATIVE:\n{narrative}\n\nPROMPT:"
-        )
-        llm = get_llm(temperature=0.3)
-        raw = (tpl | llm).invoke({
-            "narrative": narrative, "era": era, "setting": setting,
-            "visual_history": visual_history or "No previous scenes yet.",
-            "char_visuals": char_visuals or ""
-        }).strip()
-        return " ".join(l.strip() for l in raw.splitlines() if l.strip())
 
     import asyncio, uuid as _uuid
     gen_id = _uuid.uuid4().hex
@@ -548,7 +528,7 @@ DO NOT fall back to generic 1920s tropes. USE the setting, hook, NPCs, and threa
                     char_visuals = "ESTABLISHED CHARACTERS (maintain consistent appearance):\n"
                     char_visuals += "\n".join(f"- {r['value']}" for r in rows)
 
-            scene_prompt = _build_scene_prompt(
+            scene_prompt = build_scene_prompt(
                 narrative, era=era, setting=setting,
                 visual_history=visual_history,
                 char_visuals=char_visuals          # ← NEW
@@ -581,103 +561,11 @@ DO NOT fall back to generic 1920s tropes. USE the setting, hook, NPCs, and threa
     db.conn.commit()
     if turn_count % 5 == 0:
         import asyncio
-        asyncio.create_task(_compress_story(db))
+        asyncio.create_task(compress_story(db))
         logger.info(f"Story compression triggered at turn {turn_count}")
     
     # 6. Apply State Updates
-    if state_updates := result.get("state_updates"):
-
-        # --- PC stat changes ---
-        if target_name := state_updates.get("character_name"):
-            all_actors = db.list_actors("PC") + db.list_actors("NPC") + db.list_actors("ENEMY")
-            target = next((a for a in all_actors if target_name.lower() in a["name"].lower()), None)
-            if target:
-                changes = {}
-                hp_change  = int(state_updates.get("hp_change", 0) or 0)
-                san_change = int(state_updates.get("sanity_change", 0) or 0)
-                mp_change  = int(state_updates.get("mp_change", 0) or 0)
-
-                if hp_change != 0 or san_change != 0 or mp_change != 0:
-                    new_hp  = max(0, (target.get("hp")  or 0) + hp_change)
-                    new_san = max(0, (target.get("san") or 0) + san_change)
-                    new_mp  = max(0, (target.get("mp")  or 0) + mp_change)
-
-                    # Derive status
-                    status = target.get("status", "ok")
-                    if new_hp == 0:
-                        status = "dead"
-                    elif new_san == 0:
-                        status = "insane"
-                    elif hp_change < 0:
-                        status = "injured"
-
-                    db.upsert_actor(
-                        actor_id=target["id"], kind=target["kind"], name=target["name"],
-                        hp=new_hp, san=new_san, mp=new_mp, status=status
-                    )
-                    changes = {
-                        "actor": target["name"],
-                        **({f"hp": f"{hp_change:+} → {new_hp}"} if hp_change else {}),
-                        **({f"san": f"{san_change:+} → {new_san}"} if san_change else {}),
-                        **({f"mp": f"{mp_change:+} → {new_mp}"} if mp_change else {}),
-                        "status": status
-                    }
-                    db.log_event("STATE_UPDATE", changes)
-                    # Return absolute values so frontend can SET instead of delta-apply
-                    result["updated_actor"] = {
-                        "name": target["name"],
-                        "hp": new_hp,
-                        "san": new_san,
-                        "mp": new_mp,
-                        "status": status,
-                    }
-
-                # Inventory
-                if item_add := state_updates.get("inventory_add", ""):
-                    db.upsert_clue(title=item_add, content=f"Carried by {target['name']}", status="found")
-                    db.log_event("INVENTORY", {"actor": target["name"], "added": item_add})
-
-                if item_remove := state_updates.get("inventory_remove", ""):
-                    db.log_event("INVENTORY", {"actor": target["name"], "removed": item_remove})
-
-        # --- Location change ---
-        if new_location := state_updates.get("location_name", ""):
-            existing = db.get_location_by_name(new_location)
-            if existing:
-                loc_id = existing["id"]
-            else:
-                loc_id = db.upsert_location(name=new_location, description=state_updates.get("location_description", ""))
-            # Move all PCs to new location
-            for pc in db.list_actors("PC"):
-                db.upsert_actor(actor_id=pc["id"], kind="PC", name=pc["name"], location_id=loc_id)
-            db.log_event("LOCATION_CHANGE", {"location": new_location})
-
-        # --- Clue discovered ---
-        if clue_found := state_updates.get("clue_found", ""):
-            clues = db.list_clues(status="hidden")
-            match = next((c for c in clues if clue_found.lower() in c["title"].lower()), None)
-            if match:
-                db.upsert_clue(
-                    clue_id=match["id"], title=match["title"],
-                    content=match["content"], status="found"
-                )
-            else:
-                # Brand new clue not in blueprint — add it
-                db.upsert_clue(title=clue_found, content=state_updates.get("clue_content", ""), status="found")
-            db.log_event("CLUE_FOUND", {"clue": clue_found})
-
-        # --- Thread progress ---
-        if thread_name := state_updates.get("thread_progress", ""):
-            threads = db.list_threads()
-            match = next((t for t in threads if thread_name.lower() in t["name"].lower()), None)
-            if match:
-                db.upsert_thread(
-                    thread_id=match["id"], name=match["name"],
-                    progress=min(match["progress"] + 1, match["max_progress"]),
-                    max_progress=match["max_progress"], stakes=match.get("stakes", "")
-                )
-                db.log_event("THREAD_PROGRESS", {"thread": match["name"], "progress": match["progress"] + 1})
-
+    apply_state_updates(db, result)
     return result
 
 
@@ -790,8 +678,17 @@ async def stream_chat_logic(req: ChatRequest):
     llm = get_llm(temperature=req.temperature)
     chain = PromptTemplate.from_template(read_prompt("keeper_chat.txt")) | llm
 
+    if session_language == "ru":
+        language_instruction = (
+            "РУССКИЙ ЯЗЫК — ОБЯЗАТЕЛЬНО.\n"
+            "Весь текст в \"narrative\" и все элементы \"suggested_actions\" пиши ТОЛЬКО на русском языке.\n"
+            "Ни одного английского слова в значениях JSON. Ключи JSON остаются на английском. Всё остальное — русский."
+        )
+    else:
+        language_instruction = "Write all narrative and suggested_actions in English only."
+
     prompt_vars = {
-        "language": session_language,
+        "language": language_instruction,
         "campaign_context": context_str + "\n\n--- CURRENT GAME STATE ---\n" + state_str + verdict_guard,
         "era_context": setting_override,
         "history": get_chat_history(db, limit=15),
@@ -852,61 +749,7 @@ async def stream_chat_logic(req: ChatRequest):
     cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('turn_count', ?)", (str(turn_count),))
     db.conn.commit()
     if turn_count % 5 == 0:
-        asyncio.create_task(_compress_story(db))
+        asyncio.create_task(compress_story(db))
 
-    if state_updates := result.get("state_updates"):
-        if target_name := state_updates.get("character_name"):
-            all_actors = db.list_actors("PC") + db.list_actors("NPC") + db.list_actors("ENEMY")
-            target = next((a for a in all_actors if target_name.lower() in a["name"].lower()), None)
-            if target:
-                hp_change  = int(state_updates.get("hp_change", 0) or 0)
-                san_change = int(state_updates.get("sanity_change", 0) or 0)
-                mp_change  = int(state_updates.get("mp_change", 0) or 0)
-                if hp_change or san_change or mp_change:
-                    new_hp  = max(0, (target.get("hp") or 0) + hp_change)
-                    new_san = max(0, (target.get("san") or 0) + san_change)
-                    new_mp  = max(0, (target.get("mp") or 0) + mp_change)
-                    status = "dead" if new_hp == 0 else "insane" if new_san == 0 else "injured" if hp_change < 0 else target.get("status", "ok")
-                    db.upsert_actor(actor_id=target["id"], kind=target["kind"], name=target["name"],
-                                    hp=new_hp, san=new_san, mp=new_mp, status=status)
-                    db.log_event("STATE_UPDATE", {"actor": target["name"], "status": status})
-                    # Return absolute values so frontend can SET instead of delta-apply
-                    result["updated_actor"] = {
-                        "name": target["name"],
-                        "hp": new_hp,
-                        "san": new_san,
-                        "mp": new_mp,
-                        "status": status,
-                    }
-                if item_add := state_updates.get("inventory_add", ""):
-                    db.upsert_clue(title=item_add, content=f"Carried by {target['name']}", status="found")
-                if item_remove := state_updates.get("inventory_remove", ""):
-                    db.log_event("INVENTORY", {"actor": target["name"], "removed": item_remove})
-
-        if new_location := state_updates.get("location_name", ""):
-            existing = db.get_location_by_name(new_location)
-            loc_id = existing["id"] if existing else db.upsert_location(
-                name=new_location, description=state_updates.get("location_description", ""))
-            for pc in db.list_actors("PC"):
-                db.upsert_actor(actor_id=pc["id"], kind="PC", name=pc["name"], location_id=loc_id)
-            db.log_event("LOCATION_CHANGE", {"location": new_location})
-
-        if clue_found := state_updates.get("clue_found", ""):
-            clues = db.list_clues(status="hidden")
-            match = next((c for c in clues if clue_found.lower() in c["title"].lower()), None)
-            if match:
-                db.upsert_clue(clue_id=match["id"], title=match["title"], content=match["content"], status="found")
-            else:
-                db.upsert_clue(title=clue_found, content=state_updates.get("clue_content", ""), status="found")
-            db.log_event("CLUE_FOUND", {"clue": clue_found})
-
-        if thread_name := state_updates.get("thread_progress", ""):
-            threads = db.list_threads()
-            match = next((t for t in threads if thread_name.lower() in t["name"].lower()), None)
-            if match:
-                db.upsert_thread(thread_id=match["id"], name=match["name"],
-                                 progress=min(match["progress"] + 1, match["max_progress"]),
-                                 max_progress=match["max_progress"], stakes=match.get("stakes", ""))
-                db.log_event("THREAD_PROGRESS", {"thread": match["name"]})
-
+    apply_state_updates(db, result)
     yield f"data: {_json.dumps({'type': 'done', 'payload': result}, ensure_ascii=False)}\n\n"

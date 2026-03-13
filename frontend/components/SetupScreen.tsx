@@ -111,10 +111,21 @@ export const SetupScreen: React.FC<Props> = ({ onStart, isLoading }) => {
           <button onClick={() => setLlmProvider('ollama')} className={`px-3 py-1 text-xs font-bold rounded-md ${llmProvider === 'ollama' ? 'bg-indigo-700 text-white' : 'text-gray-400'}`}>LOCAL</button>
           <button onClick={() => setLlmProvider('openai')} className={`px-3 py-1 text-xs font-bold rounded-md ${llmProvider === 'openai' ? 'bg-green-800 text-white' : 'text-gray-400'}`}>GPT-4o</button>
         </div>
-        <div className="flex bg-black/60 rounded-lg p-1 backdrop-blur-md border border-gray-700">
-          <button onClick={() => setLanguage('ru')} className={`px-3 py-1 text-xs font-bold rounded-md ${language === 'ru' ? 'bg-cthulhu-blood text-white' : 'text-gray-400'}`}>RU</button>
-          <button onClick={() => setLanguage('en')} className={`px-3 py-1 text-xs font-bold rounded-md ${language === 'en' ? 'bg-cthulhu-blood text-white' : 'text-gray-400'}`}>EN</button>
-        </div>
+        <select
+          value={language}
+          onChange={e => setLanguage(e.target.value as Language)}
+          className="bg-black/60 border border-gray-700 rounded-lg px-2 py-1.5 text-xs font-bold text-gray-200 backdrop-blur-md outline-none cursor-pointer"
+        >
+          <option value="ru">🇷🇺 RU</option>
+          <option value="en">🇬🇧 EN</option>
+          <option value="de">🇩🇪 DE</option>
+          <option value="fr">🇫🇷 FR</option>
+          <option value="pl">🇵🇱 PL</option>
+          <option value="es">🇪🇸 ES</option>
+          <option value="it">🇮🇹 IT</option>
+          <option value="zh">🇨🇳 ZH</option>
+          <option value="ja">🇯🇵 JA</option>
+        </select>
       </div>
 
       {/* Title — flex-none, never grows */}

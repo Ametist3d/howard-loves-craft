@@ -1,4 +1,4 @@
-export type Language = 'en' | 'ru';
+export type Language = 'ru' | 'en' | 'de' | 'fr' | 'pl' | 'es' | 'it' | 'zh' | 'ja';
 
 export interface PrebuiltScenario {
   id: string;
