@@ -23,9 +23,9 @@ from utils.engine import (
     start_session_logic,
     handle_chat_logic,
     _image_results,
-    generate_avatar_logic,
     stream_chat_logic,
 )
+from utils.helpers import generate_avatar_logic
 
 # ─── Config from .env ────────────────────────────────────────────────────────
 BE_HOST = os.getenv("BE_HOST", "0.0.0.0")
