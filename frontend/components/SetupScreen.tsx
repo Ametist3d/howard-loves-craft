@@ -43,6 +43,21 @@ const THEMES = [
   { id: 'cult',          labelRu: 'Культы',           labelEn: 'Cults' },
 ];
 
+const UI_TEXT: Record<string, { summoning: string; selectScenario: string; begin: string }> = {
+  ua: { summoning: 'РИТУАЛ ВИКЛИКУ...',     selectScenario: 'Оберіть сценарій вище', begin: 'ПОЧАТИ'    },
+  ru: { summoning: 'РИТУАЛ ПРИЗЫВА...',     selectScenario: 'Выберите сценарий выше', begin: 'НАЧАТЬ'   },
+  en: { summoning: 'SUMMONING RITUAL...',   selectScenario: 'Select a scenario above', begin: 'BEGIN'   },
+  de: { summoning: 'BESCHWÖRUNGSRITUAL...', selectScenario: 'Szenario oben wählen',   begin: 'BEGINNEN' },
+  fr: { summoning: 'RITUEL D\'INVOCATION...', selectScenario: 'Choisir un scénario', begin: 'COMMENCER' },
+  pl: { summoning: 'RYTUAŁ PRZYWOŁANIA...', selectScenario: 'Wybierz scenariusz',    begin: 'ZACZNIJ'   },
+  es: { summoning: 'RITUAL DE INVOCACIÓN...', selectScenario: 'Selecciona un escenario', begin: 'COMENZAR' },
+  it: { summoning: 'RITUALE DI EVOCAZIONE...', selectScenario: 'Scegli uno scenario', begin: 'INIZIA'  },
+  zh: { summoning: '召唤仪式中...',            selectScenario: '请在上方选择剧本',       begin: '开始'      },
+  ja: { summoning: '召喚の儀式中...',          selectScenario: 'シナリオを選んでください', begin: '開始'    },
+};
+
+
+
 export const SetupScreen: React.FC<Props> = ({ onStart, isLoading }) => {
   const [investigators, setInvestigators] = useState<InvestigatorConfig[]>([]);
   const [language, setLanguage] = useState<Language>('ru');
@@ -56,6 +71,7 @@ export const SetupScreen: React.FC<Props> = ({ onStart, isLoading }) => {
   const [prebuiltLoading, setPrebuiltLoading] = useState(false);
   const [selectedThemes, setSelectedThemes] = useState<string[]>([]);
   const [customPrompt, setCustomPrompt] = useState('');
+  const t = UI_TEXT[language] ?? UI_TEXT['en'];
 
   useEffect(() => {
     setPrebuiltLoading(true);
@@ -96,7 +112,7 @@ export const SetupScreen: React.FC<Props> = ({ onStart, isLoading }) => {
           <div className="w-3 h-3 bg-cthulhu-blood rounded-full shadow-[0_0_20px_rgba(127,29,29,0.8)] animate-pulse"></div>
         </div>
         <h2 className="text-3xl font-serif text-cthulhu-paper mb-2 tracking-widest">
-          {language === 'ru' ? 'РИТУАЛ ПРИЗЫВА...' : 'SUMMONING RITUAL...'}
+          {t.summoning}
         </h2>
       </div>
     );
@@ -116,8 +132,9 @@ export const SetupScreen: React.FC<Props> = ({ onStart, isLoading }) => {
           onChange={e => setLanguage(e.target.value as Language)}
           className="bg-black/60 border border-gray-700 rounded-lg px-2 py-1.5 text-xs font-bold text-gray-200 backdrop-blur-md outline-none cursor-pointer"
         >
-          <option value="ru">🇷🇺 RU</option>
+          <option value="ua">🇺🇦 UA</option>
           <option value="en">🇬🇧 EN</option>
+          <option value="ru">🇷🇺 RU</option>
           <option value="de">🇩🇪 DE</option>
           <option value="fr">🇫🇷 FR</option>
           <option value="pl">🇵🇱 PL</option>
@@ -183,7 +200,7 @@ export const SetupScreen: React.FC<Props> = ({ onStart, isLoading }) => {
                       className={`text-left px-3 py-2 rounded border text-xs
                         ${selectedPrebuilt?.id === s.id ? 'bg-cthulhu-800 border-cthulhu-blood text-cthulhu-paper' : 'bg-black/20 border-gray-800 text-gray-400'}`}>
                       <div className="font-bold mb-0.5">{s.title}</div>
-                      <div className="text-[10px] text-gray-500 line-clamp-2">{s.content.slice(0, 100)}...</div>
+                      {/* <div className="text-[10px] text-gray-500 line-clamp-2">{s.content.slice(0, 100)}...</div> */}
                       {selectedPrebuilt?.id === s.id && <span className="text-cthulhu-blood text-[10px]">✓ Selected</span>}
                     </button>
                   ))}
@@ -242,11 +259,11 @@ export const SetupScreen: React.FC<Props> = ({ onStart, isLoading }) => {
           disabled={!canStart}
           className="w-full max-w-md bg-cthulhu-paper text-cthulhu-900 font-bold font-serif py-3 rounded border-2 border-cthulhu-paper hover:bg-transparent hover:text-cthulhu-paper transition-all uppercase tracking-widest text-lg disabled:opacity-50"
         >
-          {language === 'ru' ? 'НАЧАТЬ' : 'BEGIN'}
+          {t.begin}
         </button>
         {scenario === 'prebuilt' && !selectedPrebuilt && investigators.length > 0 && (
           <p className="text-xs text-gray-600">
-            {language === 'ru' ? 'Выберите сценарий выше' : 'Select a scenario above'}
+            {t.selectScenario}
           </p>
         )}
       </div>

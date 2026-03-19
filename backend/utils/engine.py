@@ -11,6 +11,7 @@ from langchain_core.prompts import PromptTemplate
 from utils.db_session import SessionDB, create_session_db_file
 from utils.schemas import CharGenRequest, StartSessionRequest, ChatRequest
 from utils.helpers import read_prompt, extract_json, get_chat_history, get_llm, compress_story, build_scene_prompt, generate_avatar_logic, apply_state_updates
+from utils.prompt_translate import ensure_translated_prompts, LANGUAGE_LABELS
 
 logger = logging.getLogger("keeper_ai.engine")
 
@@ -21,10 +22,10 @@ from img_gen.comfy_client import BASE_URL as _COMFY_BASE_URL
 # _COMFY_BASE_URL = "https://provided-feeds-pipe-avatar.trycloudflare.com"  # update as needed
 
 # Paths
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-_BACKEND_DIR = os.path.dirname(BASE_DIR)
-DATA_DIR = os.path.join(_BACKEND_DIR, "data")
-SESSIONS_DIR = os.path.join(DATA_DIR, "sessions")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))   # backend/utils
+_BACKEND_DIR = os.path.dirname(BASE_DIR)                # backend
+DATA_DIR = os.path.join(_BACKEND_DIR, "data")           # backend/data
+SESSIONS_DIR = os.path.join(DATA_DIR, "sessions")       # backend/data/sessions
 
 import datetime
 _DEBUG_LOG = os.path.join(DATA_DIR, "prebuilt_debug.log")
@@ -55,9 +56,11 @@ except Exception as e:
 
 async def generate_character_logic(req: CharGenRequest) -> dict:
     llm = get_llm(temperature=0.7)
-    chain = PromptTemplate.from_template(read_prompt("character_gen.txt")) | llm
+    prompt_dir = ensure_translated_prompts("__pre_session__", req.language, filenames=("character_gen.txt",))
+    chain = PromptTemplate.from_template(read_prompt("character_gen.txt", session_prompt_dir=prompt_dir)) | llm
     response_text = chain.invoke({
         "language": req.language,
+        "language_name": LANGUAGE_LABELS.get(req.language, req.language),
         "prompt": req.prompt,
         "era_context": req.era_context or "1920s Lovecraftian Horror — default if no setting selected"
     })
@@ -89,6 +92,9 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
     active_dbs[session_id] = db
     logger.info(f"Created new unique session DB: {info.db_path}")
 
+    prompt_dir = ensure_translated_prompts(session_id, req.language)
+    logger.info(f"Prepared translated prompt set for session '{session_id}' in {req.language}: {prompt_dir}")
+
     # 2. Insert Investigators
     for inv in req.investigators:
         chars = inv.get("characteristics", {})
@@ -114,7 +120,7 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
     # 3. Build scenario blueprint
     scenario_atoms_text = ""
     blueprint = {}
-    lang = req.language if hasattr(req, 'language') else 'ru'
+    lang = req.language if hasattr(req, 'language') else 'en'
 
     if req.scenarioType == 'prebuilt' and req.picked_seed:
         # ── PREBUILT PATH ──────────────────────────────────────────────────────
@@ -157,54 +163,6 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
                 f"ATMOSPHERE: {blueprint.get('atmosphere_notes', '')}"
             )
             logger.info(f"Prebuilt blueprint extracted: {blueprint.get('title', '?')}")
-
-            if lang == 'ru':
-                logger.info(f"[PREBUILT] Translating atoms to Russian...")
-                translate_prompt = (
-                    "Translate the following text into Russian. "
-                    "Do NOT translate proper nouns (person names, place names, ship names, artifact names). "
-                    "Output ONLY the translated text, nothing else:\n\n"
-                    f"{scenario_atoms_text}"
-                )
-                try:
-                    translated_atoms = get_llm(temperature=0.1).invoke(translate_prompt).strip()
-                    _dbg("TRANSLATE PROMPT", translate_prompt)
-                    _dbg("TRANSLATE RAW RESPONSE", translated_atoms)
-                    if translated_atoms:
-                        scenario_atoms_text = translated_atoms
-                    logger.info(f"[PREBUILT] scenario_atoms_text after translation: {scenario_atoms_text[:200]}")
-                except Exception as te:
-                    logger.warning(f"Atoms translation failed ({te}), keeping English.")
-
-                for loc in blueprint.get('locations', []):
-                    if loc.get('description'):
-                        field_prompt = f"Translate to Russian, keep proper nouns unchanged, output only the translation:\n{loc['description']}"
-                        raw = get_llm(temperature=0.1).invoke(field_prompt).strip()
-                        _dbg(f"FIELD location.description [{loc['name']}]", f"IN: {loc['description']}\nOUT: {raw}")
-                        loc['description'] = raw or loc['description']
-
-                for npc in blueprint.get('npcs', []):
-                    for field in ('description', 'secret'):
-                        if npc.get(field):
-                            field_prompt = f"Translate to Russian, keep proper nouns unchanged, output only the translation:\n{npc[field]}"
-                            raw = get_llm(temperature=0.1).invoke(field_prompt).strip()
-                            _dbg(f"FIELD npc.{field} [{npc['name']}]", f"IN: {npc[field]}\nOUT: {raw}")
-                            npc[field] = raw or npc[field]
-
-                for i, clue in enumerate(blueprint.get('clues', [])):
-                    if clue.get('content'):
-                        field_prompt = f"Translate to Russian, keep proper nouns unchanged, output only the translation:\n{clue['content']}"
-                        raw = get_llm(temperature=0.1).invoke(field_prompt).strip()
-                        _dbg(f"FIELD clue.content [{clue.get('title', i)}]", f"IN: {clue['content']}\nOUT: {raw}")
-                        clue['content'] = raw or clue['content']
-
-                for thread in blueprint.get('plot_threads', []):
-                    if thread.get('stakes'):
-                        field_prompt = f"Translate to Russian, keep proper nouns unchanged, output only the translation:\n{thread['stakes']}"
-                        raw = get_llm(temperature=0.1).invoke(field_prompt).strip()
-                        _dbg(f"FIELD thread.stakes [{thread['name']}]", f"IN: {thread['stakes']}\nOUT: {raw}")
-                        thread['stakes'] = raw or thread['stakes']
-
         except Exception as e:
             logger.warning(f"Prebuilt extraction failed ({e}), using raw scenario text.")
             blueprint = {}
@@ -241,11 +199,12 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
         logger.info("Synthesizing unique scenario blueprint from atoms...")
         try:
             synth_llm = get_llm(temperature=0.9)
-            synth_chain = PromptTemplate.from_template(read_prompt("scenario_gen.txt")) | synth_llm
+            synth_chain = PromptTemplate.from_template(read_prompt("scenario_gen.txt", session_prompt_dir=prompt_dir)) | synth_llm
             synth_raw = synth_chain.invoke({
                 "themes": themes_str,
                 "era_context": era_context,
                 "language": lang,
+                "language_name": LANGUAGE_LABELS.get(lang, lang),
                 "atoms": raw_atoms_text
             })
             blueprint = extract_json(synth_raw)
@@ -327,6 +286,8 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
     cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('era_context', ?)", (str(era_context),))
     cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_source', ?)", (str(req.picked_seed[:100]) if req.picked_seed else "",))
     cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('language', ?)", (str(req.language),))
+    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('prompt_dir', ?)", (str(prompt_dir),))
+    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('prompt_language', ?)", (str(req.language),))
     cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_blueprint_json', ?)",
         (json.dumps(blueprint, ensure_ascii=False) if isinstance(blueprint, dict) else "{}",))
     db.conn.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)", ("scenario_era", str(era_context)))
@@ -337,7 +298,7 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
     print(f"==>> [SESSION START] language stored        : {repr(req.language)}")
 
     # 4. Trigger opening narration
-    start_msg = "Начни историю. Опиши стартовую локацию." if req.language == 'ru' else "Start the story. Describe the starting location."
+    start_msg = "Start the story. Describe the starting location."
     return await handle_chat_logic(ChatRequest(message=start_msg, session_id=session_id))
     
 async def handle_chat_logic(req: ChatRequest) -> dict:
@@ -347,13 +308,32 @@ async def handle_chat_logic(req: ChatRequest) -> dict:
 
     db = active_dbs[req.session_id]
     db.log_event("CHAT", {"role": "User", "content": req.message})
-    dead_pcs = [a for a in db.list_actors("PC") if a.get("status") in ("dead", "insane")]
-    if dead_pcs:
-        names = ", ".join(a["name"] for a in dead_pcs)
-        req = req.model_copy(update={"message": 
-            req.message + f"\n\n[KEEPER NOTE: {names} are dead/incapacitated and cannot act. "
-            f"Do not narrate their actions. Acknowledge their fate if relevant.]"
-        })
+    pcs = db.list_actors("PC")
+    active_pcs = [a for a in pcs if a.get("status") not in ("dead", "insane")]
+    inactive_pcs = [a for a in pcs if a.get("status") in ("dead", "insane")]
+
+    if not active_pcs:
+        return {
+            "narrative": "💀 The story is over. No investigator remains able to continue.",
+            "suggested_actions": [],
+            "state_updates": None,
+            "game_over": True,
+        }
+
+    if inactive_pcs:
+        dead_names = {a["name"].lower() for a in inactive_pcs}
+        msg_lower = req.message.lower()
+
+        if any(name in msg_lower for name in dead_names):
+            names = ", ".join(a["name"] for a in inactive_pcs if a["name"].lower() in msg_lower)
+            return {
+                "narrative": f"💀 {names} can no longer act. Their story is over.",
+                "suggested_actions": [
+                    f"Continue as {a['name']}" for a in active_pcs[:3]
+                ],
+                "state_updates": None,
+                "game_over": False,
+            }
     
     # 1. Fetch Permanent Campaign Module (Atoms) from DB
     cur = db.conn.cursor()
@@ -418,11 +398,7 @@ DO NOT fall back to generic 1920s tropes. USE the setting, hook, NPCs, and threa
     )
 
     # 5. Invoke LLM
-    llm = get_llm(temperature=req.temperature)
-    chain = PromptTemplate.from_template(read_prompt("keeper_chat.txt")) | llm
-    
-    # Send to LLM
-        # Fetch setting override from blueprint if available
+    # Fetch setting override from blueprint if available
     cur.execute("SELECT value FROM kv_store WHERE key='scenario_setting'")
     row_setting = cur.fetchone()
     setting_override = row_setting["value"] if row_setting else "Lovecraftian Horror Lore"
@@ -434,6 +410,13 @@ DO NOT fall back to generic 1920s tropes. USE the setting, hook, NPCs, and threa
     cur.execute("SELECT value FROM kv_store WHERE key='language'")
     row_lang = cur.fetchone()
     session_language = row_lang["value"] if row_lang else "en"
+
+    cur.execute("SELECT value FROM kv_store WHERE key='prompt_dir'")
+    row_prompt_dir = cur.fetchone()
+    session_prompt_dir = row_prompt_dir["value"] if row_prompt_dir and row_prompt_dir["value"] else None
+
+    llm = get_llm(temperature=req.temperature)
+    chain = PromptTemplate.from_template(read_prompt("keeper_chat.txt", session_prompt_dir=session_prompt_dir)) | llm
 
     # ── DEBUG ──────────────────────────────────────────────────────────────────────
     print(f"==>> [CHAT] setting_override read from DB : {repr(setting_override)}")
@@ -472,19 +455,13 @@ DO NOT fall back to generic 1920s tropes. USE the setting, hook, NPCs, and threa
                 + "\n".join(f'- "{s[:80]}"' for s in banned)
             )
     # ────────────────────────────────────────────────────────────────────────────
-    if session_language == "ru":
-        language_instruction = (
-            "РУССКИЙ ЯЗЫК — ОБЯЗАТЕЛЬНО.\n"
-            "Весь текст в \"narrative\" и все элементы \"suggested_actions\" пиши ТОЛЬКО на русском языке.\n"
-            "Ни одного английского слова в значениях JSON. Ключи JSON остаются на английском. Всё остальное — русский."
-        )
-    else:
-        language_instruction = "Write all narrative and suggested_actions in English only."
+    language_name = LANGUAGE_LABELS.get(session_language, session_language)
 
     print(f"==>> [CHAT] session_language={repr(session_language)}")
     
     response_text = chain.invoke({
-        "language": language_instruction,
+        "language": session_language,
+        "language_name": language_name,
         "campaign_context": context_str + "\n\n--- CURRENT GAME STATE ---\n" + state_str + verdict_guard,
         "era_context": setting_override,
         "history": get_chat_history(db, limit=15),
@@ -601,7 +578,10 @@ async def stream_chat_logic(req: ChatRequest):
     row = cur.fetchone(); era_override = row["value"] if row else "1920s Lovecraftian Horror"
 
     cur.execute("SELECT value FROM kv_store WHERE key='language'")
-    row = cur.fetchone(); session_language = row["value"] if row else "ru"
+    row = cur.fetchone(); session_language = row["value"] if row else "en"
+
+    cur.execute("SELECT value FROM kv_store WHERE key='prompt_dir'")
+    row = cur.fetchone(); session_prompt_dir = row["value"] if row and row["value"] else None
 
     context_str = ""
     cur.execute("SELECT value FROM kv_store WHERE key='story_digest'")
@@ -676,19 +656,11 @@ async def stream_chat_logic(req: ChatRequest):
 
     # ── Stream tokens from LLM ───────────────────────────────────────────────
     llm = get_llm(temperature=req.temperature)
-    chain = PromptTemplate.from_template(read_prompt("keeper_chat.txt")) | llm
-
-    if session_language == "ru":
-        language_instruction = (
-            "РУССКИЙ ЯЗЫК — ОБЯЗАТЕЛЬНО.\n"
-            "Весь текст в \"narrative\" и все элементы \"suggested_actions\" пиши ТОЛЬКО на русском языке.\n"
-            "Ни одного английского слова в значениях JSON. Ключи JSON остаются на английском. Всё остальное — русский."
-        )
-    else:
-        language_instruction = "Write all narrative and suggested_actions in English only."
+    chain = PromptTemplate.from_template(read_prompt("keeper_chat.txt", session_prompt_dir=session_prompt_dir)) | llm
 
     prompt_vars = {
-        "language": language_instruction,
+        "language": session_language,
+        "language_name": LANGUAGE_LABELS.get(session_language, session_language),
         "campaign_context": context_str + "\n\n--- CURRENT GAME STATE ---\n" + state_str + verdict_guard,
         "era_context": setting_override,
         "history": get_chat_history(db, limit=15),

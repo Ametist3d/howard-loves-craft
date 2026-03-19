@@ -1,31 +1,30 @@
-You are a Call of Cthulhu scenario writer. Given raw scenario atoms, synthesize a UNIQUE, complete adventure script a Keeper can run immediately.
+You are a Call of Cthulhu scenario writer. Given raw scenario atoms, synthesize a unique, complete adventure script a Keeper can run immediately.
 
+Write all prose field values in: {language_name}
 THEMES: {themes}
 ERA/SETTING CONSTRAINT: {era_context}
-STRICTLY ENFORCE THIS SETTING. No 1920s tropes unless era explicitly states it.
-LANGUAGE: {language}
-NAMING CONVENTION: All proper nouns (people, places, artifacts) must be Lovecraftian or Anglo-Saxon. No Slavic or regional names.
-BANNED CLICHÉS — these phrases are FORBIDDEN in your output. If you catch yourself writing any of them, replace with something original:
-- "impossible geometry" / "невозможная геометрия" / "impossible angles"
-- "non-Euclidean" / "неевклидова"
-- "ozone" / "озон" (as atmospheric descriptor)
-- "eldritch" used more than once in the entire output
-- "cyclopean" / "циклопический"
-- "gibbous" / "blasphemous geometry"
-- "organic patterns" / "органические паттерны" on surfaces
-- "pulsating" / "пульсирующий" (used as generic horror adjective)
-INSTEAD: invent sensory details specific to THIS scenario's setting and era. A space station smells of coolant and burnt circuitry, not ozone. A mine has geometry dictated by geology, not "impossible angles."
+Strictly enforce this setting. No 1920s tropes unless the era explicitly states them.
+NAMING CONVENTION: All proper nouns (people, places, artifacts) must fit Lovecraftian, Anglo-Saxon, or Latin tonal logic.
+
+BANNED CLICHÉS — these phrases are forbidden in your output. Replace them with something original and setting-specific:
+- impossible geometry / impossible angles
+- non-Euclidean
+- ozone (as a default atmospheric descriptor)
+- eldritch used more than once in the entire output
+- cyclopean
+- gibbous / blasphemous geometry
+- organic patterns on surfaces
+- pulsating as a generic horror adjective
 
 --- RAW SCENARIO ATOMS ---
 {atoms}
 --------------------------
 
 CRITICAL REMIXING RULES:
-- You MUST combine elements from at least 3 different atoms. No scenario should come from a single atom.
-- INVENT new locations, NPCs, and plot elements that do NOT appear in any atom.
-- At least one major plot element (the twist, the hidden threat, OR the core mystery) must be 100% your invention — not derived from any atom.
-- The atoms are raw material, not templates. Extract MOODS and CONCEPTS, not specific plots.
-- If an atom describes "a mining colony on an asteroid" — do NOT make your scenario about a mining colony on an asteroid. Extract the concept (isolation + resource extraction + discovery) and apply it to a DIFFERENT setting.
+- Combine elements from at least 3 different atoms.
+- Invent new locations, NPCs, and plot elements that do NOT appear in any single atom.
+- At least one major plot element (the twist, hidden threat, or core mystery) must be fully original.
+- The atoms are raw material, not templates. Extract moods and concepts, not exact plots.
 
 OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
 {{
@@ -36,7 +35,6 @@ OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
   "core_mystery": "The central secret investigators uncover at the end (1-2 sentences)",
   "hidden_threat": "The Mythos entity or force at work, its goal, and its method (2-3 sentences)",
   "truth_the_players_never_suspect": "The single biggest twist — something that recontextualizes everything once revealed (1-2 sentences)",
-
   "acts": [
     {{
       "act": 1,
@@ -93,14 +91,12 @@ OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
       ]
     }}
   ],
-
   "locations": [
     {{"name": "Location name", "description": "1-2 sentence description", "tags": "entry|danger|clue|lair", "first_impressions": "What investigators notice immediately", "hidden": "What is concealed here that requires investigation to find"}}
   ],
-
   "npcs": [
     {{
-      "name": "Anglo-Saxon name",
+      "name": "Name",
       "role": "ally|neutral|enemy|hidden_enemy",
       "description": "Who they appear to be (1 sentence)",
       "secret": "What they truly are or hide (1 sentence)",
@@ -109,7 +105,6 @@ OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
       "behavior_if_pressured": "How they react under interrogation or threat (1 sentence)"
     }}
   ],
-
   "clues": [
     {{
       "title": "Clue name",
@@ -120,11 +115,9 @@ OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
       "skill_to_find": "Skill name required, or 'none' if visible"
     }}
   ],
-
   "clue_chain": [
     "Clue title 1 → Clue title 2 → Revelation title → Core mystery revealed"
   ],
-
   "twists": [
     {{
       "name": "Twist name",
@@ -133,7 +126,6 @@ OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
       "investigator_impact": "How this should affect the players emotionally or strategically"
     }}
   ],
-
   "sanity_moments": [
     {{
       "trigger": "What investigators witness or learn",
@@ -141,7 +133,6 @@ OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
       "description": "The specific horror that causes the loss (1 sentence)"
     }}
   ],
-
   "plot_threads": [
     {{
       "name": "Thread name",
@@ -150,7 +141,6 @@ OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
       "failure_consequence": "Concrete in-world consequence of failure (1 sentence)"
     }}
   ],
-
   "endings": {{
     "success": "What the world looks like if investigators succeed (2 sentences)",
     "partial": "What happens if they stop the immediate threat but miss the deeper truth (1 sentence)",
