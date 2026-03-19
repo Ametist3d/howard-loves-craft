@@ -337,6 +337,68 @@ class SessionDB:
         self.conn.commit()
         return aid
 
+    def patch_actor(
+        self,
+        actor_id: str,
+        *,
+        kind: Optional[str] = None,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        location_id: Optional[str] = None,
+        hp: Optional[int] = None,
+        mp: Optional[int] = None,
+        san: Optional[int] = None,
+        stats: Optional[Dict[str, int]] = None,
+        status: Optional[str] = None,
+        notes: Optional[str] = None,
+    ) -> str:
+        """
+        Partial actor update: only writes fields that are explicitly provided.
+        Prevents accidental NULL-wiping of HP/SAN/MP/stats during location changes.
+        """
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM actors WHERE id=?", (actor_id,))
+        row = cur.fetchone()
+        if not row:
+            raise ValueError(f"Actor not found: {actor_id}")
+
+        current = dict(row)
+        stats = stats or {}
+
+        vals = {
+            "id": actor_id,
+            "kind": kind if kind is not None else current["kind"],
+            "name": name if name is not None else current["name"],
+            "description": description if description is not None else current["description"],
+            "location_id": location_id if location_id is not None else current["location_id"],
+            "hp": hp if hp is not None else current["hp"],
+            "mp": mp if mp is not None else current["mp"],
+            "san": san if san is not None else current["san"],
+            "pow": stats.get("pow", current["pow"]),
+            "str": stats.get("str", current["str"]),
+            "con": stats.get("con", current["con"]),
+            "dex": stats.get("dex", current["dex"]),
+            "int": stats.get("int", current["int"]),
+            "app": stats.get("app", current["app"]),
+            "siz": stats.get("siz", current["siz"]),
+            "edu": stats.get("edu", current["edu"]),
+            "status": status if status is not None else current["status"],
+            "notes": notes if notes is not None else current["notes"],
+            "updated_at": _utc_now_iso(),
+        }
+
+        cur.execute(
+            """UPDATE actors SET
+                kind=:kind, name=:name, description=:description, location_id=:location_id,
+                hp=:hp, mp=:mp, san=:san,
+                pow=:pow, str=:str, con=:con, dex=:dex, int=:int, app=:app, siz=:siz, edu=:edu,
+                status=:status, notes=:notes, updated_at=:updated_at
+            WHERE id=:id""",
+            vals,
+        )
+        self.conn.commit()
+        return actor_id
+
     def set_skill(self, actor_id: str, skill: str, value: int):
         cur = self.conn.cursor()
         cur.execute(

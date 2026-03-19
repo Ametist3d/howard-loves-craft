@@ -7,8 +7,9 @@ from utils.db_session import SessionDB
 from langchain_core.prompts import PromptTemplate
 from img_gen.comfy_client import BASE_URL as _COMFY_BASE_URL
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
+UTILS_DIR = os.path.dirname(os.path.abspath(__file__))   # backend/utils
+BACKEND_DIR = os.path.dirname(UTILS_DIR)                 # backend
+PROMPTS_DIR = os.path.join(BACKEND_DIR, "prompts")       # backend/prompts
 
 logger = logging.getLogger("keeper_ai.helpers")
 
@@ -17,8 +18,9 @@ logger = logging.getLogger("keeper_ai.helpers")
 # File / JSON helpers
 # ─────────────────────────────────────────────
 
-def read_prompt(filename: str) -> str:
-    with open(os.path.join(PROMPTS_DIR, filename), 'r', encoding='utf-8') as f:
+def read_prompt(filename: str, *, session_prompt_dir: str | None = None) -> str:
+    prompt_path = os.path.join(session_prompt_dir, filename) if session_prompt_dir else os.path.join(PROMPTS_DIR, filename)
+    with open(prompt_path, 'r', encoding='utf-8') as f:
         return f.read()
 
 
@@ -87,7 +89,7 @@ def get_chat_history(db: SessionDB, limit: int = 10) -> str:
                 last_sentence = content.rstrip().rsplit(".", 1)[-1].strip()
                 if not last_sentence or len(last_sentence) < 10:
                     last_sentence = content[-120:].strip()
-                content = f"[...сцена описана ранее...] {last_sentence}"
+                content = f"[scene summarized earlier] {last_sentence}"
             chat_lines.append(f"KEEPER: {content}")
         else:
             # Player messages are short actions — keep them full
@@ -243,11 +245,11 @@ async def compress_story(db: SessionDB) -> None:
 
         cur = db.conn.cursor()
         prev_digest = kv_get(cur, "story_digest", "(none yet)")
-        lang = kv_get(cur, "language", "ru")
+        lang = kv_get(cur, "language", "en")
 
         compression_prompt = (
             f"You are a scribe summarizing a Call of Cthulhu session for continuity.\n"
-            f"Language: {lang}. Write the digest in this language.\n\n"
+            f"Write the digest in this language: {lang}.\n\n"
             f"PREVIOUS DIGEST (events before this batch):\n{prev_digest}\n\n"
             f"RECENT SESSION EXCHANGES:\n{full_history[-6000:]}\n\n"
             f"Write a STORY DIGEST — a compact, factual record of what has happened in this session.\n"
@@ -388,11 +390,24 @@ def apply_state_updates(db: SessionDB, result: dict) -> None:
                 new_san = max(0, (target.get("san") or 0) + san_change)
                 new_mp  = max(0, (target.get("mp")  or 0) + mp_change)
                 status = target.get("status", "ok")
-                if new_hp == 0:   status = "dead"
-                elif new_san == 0: status = "insane"
-                elif hp_change < 0: status = "injured"
-                db.upsert_actor(actor_id=target["id"], kind=target["kind"], name=target["name"],
-                                hp=new_hp, san=new_san, mp=new_mp, status=status)
+                status = target.get("status", "ok")
+                if new_hp <= 0:
+                    status = "dead"
+                elif new_san <= 0:
+                    status = "insane"
+                elif hp_change < 0:
+                    status = "injured"
+                elif status in ("injured", "insane") and new_hp > 0 and new_san > 0:
+                    status = "ok"
+                # db.upsert_actor(actor_id=target["id"], kind=target["kind"], name=target["name"],
+                #                 hp=new_hp, san=new_san, mp=new_mp, status=status)
+                db.patch_actor(
+                    actor_id=target["id"],
+                    hp=new_hp,
+                    san=new_san,
+                    mp=new_mp,
+                    status=status,
+                )
                 db.log_event("STATE_UPDATE", {"actor": target["name"], "status": status,
                     **({f"hp": f"{hp_change:+}→{new_hp}"} if hp_change else {}),
                     **({f"san": f"{san_change:+}→{new_san}"} if san_change else {}),
@@ -415,7 +430,8 @@ def apply_state_updates(db: SessionDB, result: dict) -> None:
         loc_id = existing["id"] if existing else db.upsert_location(
             name=new_location, description=state_updates.get("location_description", ""))
         for pc in db.list_actors("PC"):
-            db.upsert_actor(actor_id=pc["id"], kind="PC", name=pc["name"], location_id=loc_id)
+            if pc.get("status") not in ("dead", "insane"):
+                db.patch_actor(actor_id=pc["id"], location_id=loc_id)
         db.log_event("LOCATION_CHANGE", {"location": new_location})
 
     # --- Clue discovered ---
