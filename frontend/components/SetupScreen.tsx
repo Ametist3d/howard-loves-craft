@@ -134,6 +134,7 @@ export const SetupScreen: React.FC<Props> = ({ onStart, isLoading }) => {
         >
           <option value="ua">🇺🇦 UA</option>
           <option value="en">🇬🇧 EN</option>
+          <option value="hr">🇭🇷 HR</option>
           <option value="ru">🇷🇺 RU</option>
           <option value="de">🇩🇪 DE</option>
           <option value="fr">🇫🇷 FR</option>

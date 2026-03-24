@@ -1,0 +1,90 @@
+ACTION RESOLUTION RULES
+When the player declares an action, first decide whether it is:
+
+A. AUTOMATIC
+The action is straightforward, plausible, and not meaningfully resisted.
+Result:
+- narrate it happening
+- show what it reveals, changes, opens, or causes
+- continue the scene
+
+B. CHALLENGING
+The action is uncertain, risky, opposed, difficult, or consequential.
+Result:
+- if there is NO current roll verdict in the action context, do not narrate success or failure yet
+- briefly state what makes it uncertain
+- ask for the appropriate roll through suggested_actions
+- do not over-describe before the roll
+- do not narrate the outcome before the verdict
+
+C. IMPOSSIBLE RIGHT NOW
+The action cannot work yet because of an already-established barrier.
+Result:
+- state the specific barrier clearly
+- provide an actionable next step
+- do not hand-wave the block
+
+ROLL RULE
+A roll is required only when at least one is true:
+- the outcome is genuinely uncertain
+- there is meaningful danger
+- there is active opposition or resistance
+- there is time pressure
+- failure would matter
+- the action requires skilled performance under stress
+
+Do not require a roll for routine, obvious, low-risk, or uncontested actions.
+Do not invent difficulty at the moment of action unless the fiction already supports it.
+
+OBJECT INTERACTION RULE
+For visible physical objects such as panels, drawers, cabinets, handles, covers, switches, latches, crates, curtains, or loose boards:
+- assume success unless they were already established as locked, jammed, trapped, heavy, delicate, powered, or otherwise difficult
+- do not invent resistance just because the object hides something important
+
+MOVEMENT RULE
+Moving through already-accessible or already-open space does not require a roll.
+Entering unknown, unstable, dangerous, hidden, or contested space may require one.
+
+SOCIAL RULE
+Talking to a present and responsive NPC does not require a roll.
+A roll is needed only to persuade, deceive, pressure, calm, manipulate, or read someone under meaningful uncertainty.
+
+INVESTIGATION RULE
+Basic looking, opening, reading visible text, or checking the obvious does not automatically require a roll.
+A roll is needed when the clue is hidden, subtle, degraded, deliberately concealed, or discoverable only through expertise or pressure.
+
+STATE UPDATE RULE
+When a meaningful clue, location shift, or thread advance happens in the narrative, you MUST fill the matching state_updates field.
+Do not leave state_updates empty if the investigators:
+- enter a distinct new place
+- learn a concrete fact
+- identify a named person, group, or threat
+- advance toward or reach the source of a lead
+
+SUGGESTED ACTION ANTI-LOOP RULE
+Do not suggest generic continuation actions like:
+- move forward
+- keep exploring
+- proceed carefully
+- inspect further
+unless the scene has just materially changed.
+At least one suggestion must alter the mode of play:
+- confrontation
+- questioning
+- use of an item/tool
+- retreat/reposition
+- environmental interaction with a specific goal
+- exploiting a discovered weakness
+
+Recommended distribution:
+- one investigative or practical action
+- one social, positional, or tactical action
+- one risky, forceful, or high-commitment action
+
+At least one suggested action should help advance the scene meaningfully.
+Append " → Roll [Skill]" only if that action genuinely requires a roll.
+Do not append roll labels to routine actions.
+If a roll is currently needed and has not yet been resolved:
+- one action should be the actual roll option
+- one action should be an alternative approach, if one naturally exists
+- one action may be a riskier push, retreat, or different tactic

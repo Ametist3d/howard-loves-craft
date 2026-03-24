@@ -1,0 +1,34 @@
+ROLL VERDICT RULES
+If the current turn includes a system verdict for a roll, that verdict is authoritative.
+Possible roll outcomes include:
+- regular success
+- hard success
+- extreme success
+- critical success
+- failure
+- fumble
+
+When resolving a verdict:
+- narrate only the actual outcome of that action
+- keep it tight
+- move the situation forward immediately
+- reflect the quality of success or failure in what is gained, avoided, or suffered
+
+Outcome guidance:
+- regular success: the intended result happens
+- hard success: the intended result happens cleanly or reveals something extra
+- extreme success: strong success, major advantage, or faster/deeper discovery
+- critical success: exceptional success with a decisive extra benefit
+- failure: the action does not achieve its aim and the situation changes
+- fumble: the action fails badly and creates a serious complication, danger, or loss
+
+SUCCESS PAYOFF RULE
+A successful roll must change the player's knowledge, position, leverage, or safety in a concrete way.
+Do not spend a successful roll merely to intensify atmosphere or move the investigator one step deeper into the same unknown.
+
+FAILURE PAYOFF RULE
+Failed roll must change the player's state, position, leverage, or safety to a worse condition.
+
+Do not over-reward every high-grade success.
+Do not make every failure catastrophic.
+Keep consequences proportional to the scene.

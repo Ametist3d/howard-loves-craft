@@ -4,7 +4,7 @@ import { Investigator } from '../types';
 interface DiceRollerProps {
   investigators: Investigator[];
   onRoll: (result: number, type: 'd100' | 'd20' | 'd10' | 'd8' | 'd6' | 'd4') => void;
-  onManualSubmit: (investigatorName: string, result: number, skillName?: string, skillValue?: number) => void;
+  onManualSubmit: (investigatorName: string, result: number, skillName?: string, skillValue?: number, luckSpent?: number) => void;
   onUseLuck: (investigatorName: string, luckSpent: number) => void;
   forceActive?: boolean;
   autoSelectedSkill?: { investigatorName: string, skillName: string } | null;
@@ -131,7 +131,7 @@ export const DiceRoller: React.FC<DiceRollerProps> = ({ investigators, onRoll, o
       // Deduct luck in parent state
       onUseLuck(inv.name, save.cost);
       // Submit as a success at exactly the threshold
-      onManualSubmit(inv.name, skillValue, skillName, skillValue);
+      onManualSubmit(inv.name, skillValue, skillName, skillValue, save.cost);
       setPendingResult(null);
       setLastResult(skillValue);
   };
@@ -142,10 +142,16 @@ export const DiceRoller: React.FC<DiceRollerProps> = ({ investigators, onRoll, o
 
       const options = [];
       const chars = inv.characteristics;
+
       options.push(<option key="str" value={`Сила (STR)|${chars.STR}`}>СИЛ (STR) ({chars.STR})</option>);
+      options.push(<option key="con" value={`Телосложение (CON)|${chars.CON}`}>ТЕЛ (CON) ({chars.CON})</option>);
+      options.push(<option key="siz" value={`Размер (SIZ)|${chars.SIZ}`}>РАЗ (SIZ) ({chars.SIZ})</option>);
       options.push(<option key="dex" value={`Ловкость (DEX)|${chars.DEX}`}>ЛВК (DEX) ({chars.DEX})</option>);
+      options.push(<option key="app" value={`Внешность (APP)|${chars.APP}`}>ВНШ (APP) ({chars.APP})</option>);
+      options.push(<option key="int" value={`Интеллект (INT)|${chars.INT}`}>ИНТ (INT) ({chars.INT})</option>);
       options.push(<option key="pow" value={`Воля (POW)|${chars.POW}`}>МОЩ (POW) ({chars.POW})</option>);
-      
+      options.push(<option key="edu" value={`Образование (EDU)|${chars.EDU}`}>ОБР (EDU) ({chars.EDU})</option>);
+
       if (inv.attributes && inv.attributes.Luck && inv.attributes.Sanity) {
           options.push(<option key="luck" value={`Удача (Luck)|${inv.attributes.Luck.current}`}>Удача ({inv.attributes.Luck.current})</option>);
           options.push(<option key="san" value={`Рассудок (Sanity)|${inv.attributes.Sanity.current}`}>Рассудок ({inv.attributes.Sanity.current})</option>);
