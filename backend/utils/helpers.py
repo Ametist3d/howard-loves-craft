@@ -3,13 +3,19 @@ import re
 import json
 import logging
 from typing import Optional
+from pathlib import Path
 from utils.db_session import SessionDB
 from langchain_core.prompts import PromptTemplate
 from img_gen.comfy_client import BASE_URL as _COMFY_BASE_URL
 
-UTILS_DIR = os.path.dirname(os.path.abspath(__file__))   # backend/utils
-BACKEND_DIR = os.path.dirname(UTILS_DIR)                 # backend
-PROMPTS_DIR = os.path.join(BACKEND_DIR, "prompts")       # backend/prompts
+CURRENT_DIR = Path(__file__).resolve().parent
+PROMPT_CANDIDATE_DIRS = [
+    CURRENT_DIR / "prompts",
+    CURRENT_DIR.parent / "prompts",
+    Path("/mnt/data/prompts"),
+    CURRENT_DIR,
+    Path("/mnt/data"),
+]
 
 logger = logging.getLogger("keeper_ai.helpers")
 
@@ -17,44 +23,228 @@ logger = logging.getLogger("keeper_ai.helpers")
 # ─────────────────────────────────────────────
 # File / JSON helpers
 # ─────────────────────────────────────────────
+LANGUAGE_NAMES = {
+    "ua": "Ukrainian",
+    "en": "English",
+    "ru": "Russian",
+    "pl": "Polish",
+    "de": "German",
+    "fr": "French",
+    "es": "Spanish",
+    "it": "Italian",
+    "zh": "Chinese",
+    "ja": "Japanese",
+    "hr": "Croatian",
+}
 
-def read_prompt(filename: str, *, session_prompt_dir: str | None = None) -> str:
-    prompt_path = os.path.join(session_prompt_dir, filename) if session_prompt_dir else os.path.join(PROMPTS_DIR, filename)
-    with open(prompt_path, 'r', encoding='utf-8') as f:
-        return f.read()
+def normalize_language_code(lang: str | None) -> str:
+    raw = (lang or "en").strip().lower()
+    return raw if raw else "en"
+
+def get_language_name(lang: str | None) -> str:
+    code = normalize_language_code(lang)
+    return LANGUAGE_NAMES.get(code, code)
+
+def build_translation_instruction(target_lang: str) -> str:
+    language_name = get_language_name(target_lang)
+    return (
+        f"Translate into {language_name}. "
+        "Preserve placeholders, JSON keys, and variable markers exactly. "
+        "Do NOT translate proper nouns unless natural usage requires inflection only. "
+        "Output only the translated text."
+    )
+
+def read_prompt(filename: str, *, prompt_dir: str | None = None) -> str:
+    rel = Path(filename)
+
+    if prompt_dir:
+        candidate = Path(prompt_dir) / rel
+        if not candidate.exists():
+            raise FileNotFoundError(f"Translated prompt missing: {candidate}")
+        return candidate.read_text(encoding="utf-8")
+
+    for root in PROMPT_CANDIDATE_DIRS:
+        candidate = root / rel
+        if candidate.exists():
+            return candidate.read_text(encoding="utf-8")
+
+    raise FileNotFoundError(f"Prompt not found: {filename}")
+
+def build_scene_loop_guard(db: SessionDB) -> str:
+    events = db.list_events(limit=12)
+    user_actions = []
+    keeper_bits = []
+
+    for e in reversed(events):
+        if e.get("event_type") != "CHAT":
+            continue
+        payload = e.get("payload", {})
+        role = payload.get("role", "")
+        content = (payload.get("content", "") or "").strip()
+
+        if role == "User" and content:
+            user_actions.append(content[:120])
+        elif role == "Keeper" and content:
+            keeper_bits.append(content[:160])
+
+    recent_user = user_actions[-4:]
+    recent_keeper = keeper_bits[-3:]
+
+    return (
+        "RECENT SCENE LOOP WARNING\n"
+        "Do not repeat the same pattern again.\n"
+        "Recent user actions:\n"
+        + "\n".join(f"- {x}" for x in recent_user)
+        + "\nRecent keeper outcomes:\n"
+        + "\n".join(f"- {x}" for x in recent_keeper)
+        + "\nIf these indicate repeated creeping/exploring/listening/advancing, the next response MUST produce a payoff, interruption, clue, NPC contact, or threat action."
+    )
+
+def build_language_instruction(session_language: str) -> str:
+    return get_language_name(session_language)
+
+
+def has_roll_verdict(message: str) -> bool:
+    return "[SYSTEM MESSAGE]" in message and "VERDICT" in message
+
+
+def infer_scene_stall_level(db: SessionDB) -> int:
+    """
+    Rough anti-loop signal: count recent user turns since the latest meaningful progress event.
+    0 = fresh, 1 = mildly stalled, 2 = clearly stalled.
+    """
+    events = db.list_events(limit=18)
+    turns_since_progress = 0
+    for e in events:
+        et = e.get("event_type")
+        if et in ("LOCATION_CHANGE", "CLUE_FOUND", "THREAD_PROGRESS"):
+            break
+        if et == "CHAT" and e.get("payload", {}).get("role") == "User":
+            turns_since_progress += 1
+    if turns_since_progress >= 4:
+        return 2
+    if turns_since_progress >= 2:
+        return 1
+    return 0
+
+
+def assemble_keeper_prompt(
+    *,
+    include_roll_resolution: bool = False,
+    include_scene_progression: bool = False,
+    include_opening_scene: bool = False,
+    prompt_dir: str | None = None,
+) -> str:
+    parts = [
+        read_prompt("keeper/header.txt", prompt_dir=prompt_dir),
+        read_prompt("keeper/output_contract.txt", prompt_dir=prompt_dir),
+    ]
+    if include_opening_scene:
+        parts.append(read_prompt("keeper/opening_scene.txt", prompt_dir=prompt_dir))
+    if include_scene_progression:
+        parts.append(read_prompt("keeper/scene_progression.txt", prompt_dir=prompt_dir))
+    parts.extend([
+        read_prompt("keeper/action_adjudication.txt", prompt_dir=prompt_dir),
+        read_prompt("keeper/core_identity.txt", prompt_dir=prompt_dir),
+    ])
+    if include_roll_resolution:
+        parts.append(read_prompt("keeper/roll_resolution.txt", prompt_dir=prompt_dir))
+    parts.append(
+        "CAMPAIGN MODULE & CURRENT STATE\n{campaign_context}\n\nRECENT CHAT HISTORY\n{history}\n\nCURRENT PLAYER ACTION\n{action}"
+    )
+    return "\n\n".join(part.strip() for part in parts if part and part.strip()) + "\n"
 
 
 def extract_json(text: str) -> dict:
-    text = text.strip()
+    raw_text = text or ""
+    logger.info("extract_json(): raw response preview: %r", raw_text[:2000])
 
-    # Remove markdown code fences if present
-    text = re.sub(r'^```[a-zA-Z]*\n', '', text)
-    text = re.sub(r'\n```$', '', text)
+    text = raw_text.strip()
 
-    # Isolate the JSON block
-    start = text.find('{')
-    end = text.rfind('}')
-    if start != -1 and end != -1:
-        text = text[start:end + 1]
+    # Remove markdown fences if the model ignored the contract
+    text = re.sub(r"^```[a-zA-Z]*\n", "", text)
+    text = re.sub(r"\n```$", "", text)
 
-    # Fix LLM outputting "-1d6" instead of integers in JSON values
+    tagged = re.search(
+        r"<SYSTEM_RESPONSE_JSON>\s*(\{.*?\})\s*</SYSTEM_RESPONSE_JSON>",
+        text,
+        re.DOTALL,
+    )
+    if tagged:
+        text = tagged.group(1).strip()
+        logger.info("extract_json(): found SYSTEM_RESPONSE_JSON envelope")
+    else:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            text = text[start:end + 1]
+
+    logger.info("extract_json(): normalized candidate preview: %r", text[:2000])
+
     text = re.sub(r':\s*([-+]?\d+)[dD]\d+', r': \1', text)
 
     try:
-        return json.loads(text, strict=False)
+        parsed = json.loads(text, strict=False)
+        if isinstance(parsed, dict):
+            parsed.setdefault("narrative", "")
+            parsed.setdefault("suggested_actions", [])
+            parsed.setdefault("state_updates", None)
+            return parsed
     except json.JSONDecodeError as e:
-        print(f"JSON Parse Error intercepted: {e}. Attempting Regex Fallback.")
-        narrative_match = re.search(
-            r'"narrative"\s*:\s*"(.*?)"(?:\s*,|\s*\n\s*"suggested_actions")',
-            text, re.DOTALL | re.IGNORECASE
-        )
-        narrative = narrative_match.group(1) if narrative_match else text
-        narrative = narrative.replace('\n', ' ').replace('\\n', '\n')
-        return {
-            "narrative": narrative + "\n\n*(OOC: The Keeper's connection wavered, some state updates may have been lost.)*",
-            "suggested_actions": ["Continue"],
-            "state_updates": None
-        }
+        logger.warning("extract_json(): JSON parse error: %s", e)
+        logger.warning("extract_json(): failed candidate body: %r", text[:4000])
+
+    narrative_match = re.search(
+        r'"narrative"\s*:\s*"((?:[^"\\]|\\.)*)"',
+        text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    suggested_match = re.search(
+        r'"suggested_actions"\s*:\s*\[(.*?)\]',
+        text,
+        re.DOTALL | re.IGNORECASE,
+    )
+
+    narrative = ""
+    if narrative_match:
+        narrative = narrative_match.group(1)
+        narrative = narrative.replace("\\n", "\n").replace('\\"', '"').strip()
+
+    suggested_actions = []
+    if suggested_match:
+        raw_items = re.findall(r'"((?:[^"\\]|\\.)*)"', suggested_match.group(1), re.DOTALL)
+        suggested_actions = [
+            item.replace("\\n", " ").replace('\\"', '"').strip()
+            for item in raw_items
+            if item.strip()
+        ][:3]
+
+    action_block_match = re.search(
+        r"^(.*?)(?:Suggested actions?)\s*:\s*(.*)$",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    if not narrative and action_block_match:
+        narrative = action_block_match.group(1).strip()
+        actions_blob = action_block_match.group(2).strip()
+        action_lines = []
+        for line in actions_blob.splitlines():
+            clean = re.sub(r"^[\-\*\•\d\.\)\s]+", "", line.strip())
+            if clean:
+                action_lines.append(clean)
+        suggested_actions = action_lines[:3]
+
+    if not narrative:
+        narrative = text.strip()
+
+    recovered = {
+        "narrative": narrative,
+        "suggested_actions": suggested_actions or ["Continue"],
+        "state_updates": None,
+    }
+    logger.warning("extract_json(): recovered fallback payload: %r", recovered)
+    return recovered
 
 
 # ─────────────────────────────────────────────
@@ -89,7 +279,7 @@ def get_chat_history(db: SessionDB, limit: int = 10) -> str:
                 last_sentence = content.rstrip().rsplit(".", 1)[-1].strip()
                 if not last_sentence or len(last_sentence) < 10:
                     last_sentence = content[-120:].strip()
-                content = f"[scene summarized earlier] {last_sentence}"
+                content = f"[...сцена описана ранее...] {last_sentence}"
             chat_lines.append(f"KEEPER: {content}")
         else:
             # Player messages are short actions — keep them full
@@ -246,10 +436,11 @@ async def compress_story(db: SessionDB) -> None:
         cur = db.conn.cursor()
         prev_digest = kv_get(cur, "story_digest", "(none yet)")
         lang = kv_get(cur, "language", "en")
+        language_name = get_language_name(lang)
 
         compression_prompt = (
             f"You are a scribe summarizing a Call of Cthulhu session for continuity.\n"
-            f"Write the digest in this language: {lang}.\n\n"
+            f"Language: {language_name}. Write the digest in this language.\n\n"
             f"PREVIOUS DIGEST (events before this batch):\n{prev_digest}\n\n"
             f"RECENT SESSION EXCHANGES:\n{full_history[-6000:]}\n\n"
             f"Write a STORY DIGEST — a compact, factual record of what has happened in this session.\n"
@@ -390,24 +581,11 @@ def apply_state_updates(db: SessionDB, result: dict) -> None:
                 new_san = max(0, (target.get("san") or 0) + san_change)
                 new_mp  = max(0, (target.get("mp")  or 0) + mp_change)
                 status = target.get("status", "ok")
-                status = target.get("status", "ok")
-                if new_hp <= 0:
-                    status = "dead"
-                elif new_san <= 0:
-                    status = "insane"
-                elif hp_change < 0:
-                    status = "injured"
-                elif status in ("injured", "insane") and new_hp > 0 and new_san > 0:
-                    status = "ok"
-                # db.upsert_actor(actor_id=target["id"], kind=target["kind"], name=target["name"],
-                #                 hp=new_hp, san=new_san, mp=new_mp, status=status)
-                db.patch_actor(
-                    actor_id=target["id"],
-                    hp=new_hp,
-                    san=new_san,
-                    mp=new_mp,
-                    status=status,
-                )
+                if new_hp == 0:   status = "dead"
+                elif new_san == 0: status = "insane"
+                elif hp_change < 0: status = "injured"
+                db.upsert_actor(actor_id=target["id"], kind=target["kind"], name=target["name"],
+                                hp=new_hp, san=new_san, mp=new_mp, status=status)
                 db.log_event("STATE_UPDATE", {"actor": target["name"], "status": status,
                     **({f"hp": f"{hp_change:+}→{new_hp}"} if hp_change else {}),
                     **({f"san": f"{san_change:+}→{new_san}"} if san_change else {}),
@@ -430,8 +608,7 @@ def apply_state_updates(db: SessionDB, result: dict) -> None:
         loc_id = existing["id"] if existing else db.upsert_location(
             name=new_location, description=state_updates.get("location_description", ""))
         for pc in db.list_actors("PC"):
-            if pc.get("status") not in ("dead", "insane"):
-                db.patch_actor(actor_id=pc["id"], location_id=loc_id)
+            db.upsert_actor(actor_id=pc["id"], kind="PC", name=pc["name"], location_id=loc_id)
         db.log_event("LOCATION_CHANGE", {"location": new_location})
 
     # --- Clue discovered ---

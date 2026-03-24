@@ -25,6 +25,18 @@ const INITIAL_STATE: GameState = {
 };
 
 function App() {
+  const formatRollOutcomeLabel = (outcome?: string) => {
+    switch (outcome) {
+      case 'critical_success': return 'Critical Success';
+      case 'extreme_success': return 'Extreme Success';
+      case 'hard_success': return 'Hard Success';
+      case 'regular_success': return 'Regular Success';
+      case 'fumble': return 'Fumble';
+      case 'failure': return 'Failure';
+      default: return null;
+    }
+  };
+
     const [authToken, setAuthToken] = useState<string | null>(
       sessionStorage.getItem('keeper_token')
     );
@@ -127,6 +139,15 @@ function App() {
     }]);
 
     setSuggestedActions(response.suggested_actions || []);
+    if (response.roll_resolution?.outcome && response.roll_resolution.roll_type === "skill_check") {
+      const outcomeLabel = formatRollOutcomeLabel(response.roll_resolution.outcome);
+      if (outcomeLabel) {
+        addMessage(
+          MessageSender.SYSTEM,
+          `🎯 ${response.roll_resolution.investigator || "Investigator"}: ${outcomeLabel}${response.roll_resolution.skill ? ` — ${response.roll_resolution.skill}` : ""}`
+        );
+      }
+    }
     if (response.state_updates || response.updated_actor) handleStateUpdate(response);
 
     // 2. Poll for image — fully detached, input is unblocked immediately
@@ -343,7 +364,7 @@ function App() {
     }
   };
 
-  const handleManualRoll = async (name: string, result: number, skillName?: string, skillValue?: number) => {
+  const handleManualRoll = async (name: string, result: number, skillName?: string, skillValue?: number, luckSpent: number = 0) => {
     setSuggestedActions([]);
 
     const textToDisplay = `🎲 ${name}${skillName ? ` (${skillName})` : ''}: ${result} ${skillName ? `/ ${skillValue}` : ''}`;
@@ -358,15 +379,20 @@ function App() {
       else if (result <= skillValue)                           verdict = "REGULAR SUCCESS";
 
       const lastKeeperMsg = [...messages].reverse().find(m => m.sender === MessageSender.KEEPER);
-      const pendingContext = lastKeeperMsg
-        ? `\n\nSCENE CONTEXT (the action being resolved):\n"${lastKeeperMsg.content.slice(0, 400)}"`
+      const actionContext = pendingRolledAction
+        ? `\n\nPLAYER DECLARED ACTION BEING RESOLVED:\n"${pendingRolledAction}"`
         : '';
+
+      const pendingContext = lastKeeperMsg
+        ? `\n\nSCENE CONTEXT:\n"${lastKeeperMsg.content.slice(0, 400)}"${actionContext}`
+        : actionContext;
 
       msgToBackend = `[SYSTEM MESSAGE — DICE RESULT — READ THIS FIRST]:
 ▶ Investigator: ${name}
 ▶ Skill checked: ${skillName} (target value: ${skillValue})
 ▶ Dice roll: ${result}
 ▶ VERDICT: *** ${verdict} ***
+▶ Luck spent: ${luckSpent}
 ${pendingContext}
 
 CRITICAL INSTRUCTION FOR KEEPER: This roll resolves the action described in SCENE CONTEXT above.
@@ -385,6 +411,8 @@ Continue from exactly where the scene context left off.`;
     } catch (error) {
       addMessage(MessageSender.SYSTEM, "Connection error.");
     } finally {
+      setPendingRolledAction(null);
+      setAutoSkill(null);
       setIsLoading(false);
     }
   };
@@ -395,7 +423,7 @@ Continue from exactly where the scene context left off.`;
 
   // ── Auto-skill detection: either from clicked Roll action or from last message ──
   const [autoSkill, setAutoSkill] = useState<{ investigatorName: string; skillName: string } | null>(null);
-
+  const [pendingRolledAction, setPendingRolledAction] = useState<string | null>(null);
   // Reset autoSkill when a new Keeper message arrives
   const lastKeeperMsg = [...messages].filter(m => m.sender === MessageSender.KEEPER).pop();
   const lastKeeperMsgId = lastKeeperMsg?.id;
@@ -497,15 +525,23 @@ Continue from exactly where the scene context left off.`;
                     key={idx}
                     onClick={() => {
                       // Check if this action requires a roll
-                      const rollMatch = action.match(/→\s*Roll\s+(.+)$/i);
+                      const rollMatch = action.match(/→\s*Roll\s+(.+?)\s*$/i);
                       if (rollMatch) {
-                        const skillRaw = rollMatch[1].trim();
+                        let skillRaw = rollMatch[1].trim();
+                        // remove wrapping [ ] or ( )
+                        skillRaw = skillRaw.replace(/^[\[\(](.*)[\]\)]$/, '$1').trim();
                         const resolved = resolveSkillTarget(skillRaw);
                         if (resolved) {
-                          setAutoSkill(resolved);
-                          // Send the action text minus the roll instruction — just the narrative intent
                           const actionText = action.replace(/→\s*Roll\s+.+$/i, '').trim();
-                          handleSend(undefined, actionText || action);
+
+                          setAutoSkill(resolved);
+                          setPendingRolledAction(actionText || action);
+                          setSuggestedActions([]); // optional: hide buttons while waiting for roll
+
+                          addMessage(
+                            MessageSender.SYSTEM,
+                            `🎯 Skill check complete: ${resolved.investigatorName} — ${resolved.skillName}. Roll d100 and click CONFIRM.`
+                          );
                           return;
                         }
                       }

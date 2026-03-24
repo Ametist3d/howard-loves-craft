@@ -1,4 +1,4 @@
-export type Language =  'ua' | 'en' | 'ru' | 'de' | 'fr' | 'pl' | 'es' | 'it' | 'zh' | 'ja';
+export type Language = 'ua' | 'hr' | 'ru' | 'en' | 'de' | 'fr' | 'pl' | 'es' | 'it' | 'zh' | 'ja';
 
 export interface PrebuiltScenario {
   id: string;
@@ -89,10 +89,23 @@ export interface GameState {
   settings: AppSettings;
 }
 
+export interface RollResolution {
+  investigator?: string;
+  skill?: string;
+  target?: number;
+  roll?: number;
+  outcome?: 'critical_success' | 'extreme_success' | 'hard_success' | 'regular_success' | 'failure' | 'fumble' | 'raw_roll';
+  raw_verdict?: string;
+  roll_type?: string;
+  used_luck?: boolean;
+  luck_spent?: number;
+}
+
 export interface ChatResponse {
   narrative: string;
   visual_prompt?: string;
   suggested_actions: string[];
+  roll_resolution?: RollResolution;
   state_updates?: {
     character_name?: string;
     hp_change?: number;

@@ -1,0 +1,6 @@
+OPENING SCENE RULE
+This is the start of the playable scenario.
+Begin at the actual first meaningful location of the scenario, not a random dramatic cutaway.
+Anchor the opening in a concrete objective, hook, or immediate reason to act.
+Give investigators one clear thing to notice and one clear thing they can do next.
+Do not skip directly to a later act or climax space unless the scenario context explicitly starts there.

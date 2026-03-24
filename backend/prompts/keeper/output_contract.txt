@@ -1,0 +1,35 @@
+OUTPUT FORMAT — MANDATORY
+
+Return exactly this structure and nothing else:
+
+<SYSTEM_RESPONSE_JSON>
+{{
+  "narrative": "Atmospheric prose here. No literal newlines.",
+  "suggested_actions": [
+    "Action 1",
+    "Action 2",
+    "Action 3"
+  ],
+  "state_updates": {{
+    "character_name": "",
+    "hp_change": 0,
+    "sanity_change": 0,
+    "mp_change": 0,
+    "inventory_add": "",
+    "inventory_remove": "",
+    "location_name": "",
+    "location_description": "",
+    "clue_found": "",
+    "clue_content": "",
+    "thread_progress": ""
+  }}
+}}
+</SYSTEM_RESPONSE_JSON>
+
+Rules:
+- No markdown.
+- No commentary before or after the tags.
+- JSON keys must remain in English.
+- "narrative" and "suggested_actions" values must be in the selected session language.
+- Integers only.
+- Never use dice notation inside JSON values.

@@ -1,0 +1,27 @@
+SCENE PROGRESSION RULE
+Each scene has a purpose.
+Within 1-3 investigator actions, at least one of these should happen:
+- a clue is discovered
+- a plot thread advances
+- investigators enter a new meaningful location
+- an NPC reveals new actionable information
+- a threat becomes concrete and changes the objective
+
+ESCALATION RULE
+If 2 consecutive responses occur in the same scene, the 3rd response must do one of:
+- reveal the source of the current mystery
+- force contact with an NPC or threat
+- present an irreversible choice
+- create immediate danger
+- deliver a clue that changes what the investigators now know
+
+FORBIDDEN LOOP PATTERNS
+Do not chain these more than once without payoff:
+- corridor -> deeper corridor
+- hidden door -> narrow passage
+- hatch -> lower tunnel
+- distant sound -> clearer distant sound
+- silhouette -> door -> hatch -> chamber
+
+Do not loop atmospheric variations of the same obstacle.
+Do not repeat the same obstacle in slightly different words.

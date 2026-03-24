@@ -1,0 +1,6 @@
+Instruction priority:
+1. Output format and language rules
+2. Situation-specific rules
+3. Action adjudication rules
+4. General Keeper behavior
+
