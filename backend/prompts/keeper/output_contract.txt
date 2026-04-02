@@ -22,6 +22,26 @@ Return exactly this structure and nothing else:
     "clue_found": "",
     "clue_content": "",
     "thread_progress": ""
+  }},
+  "combat_update": {{
+    "combat_started": false,
+    "combat_ended": false,
+    "attacker_name": "",
+    "target_name": "",
+    "attack_mode": "",
+    "weapon_name": "",
+    "weapon_damage": "",
+    "skill_name": "",
+    "defender_option": "",
+    "shots_fired": 0,
+    "bonus_dice": 0,
+    "penalty_dice": 0
+  }},
+  "roll_request": {{
+    "required": false,
+    "skill_name": "",
+    "action_text": "",
+    "reason": ""
   }}
 }}
 </SYSTEM_RESPONSE_JSON>
@@ -32,4 +52,34 @@ Rules:
 - JSON keys must remain in English.
 - "narrative" and "suggested_actions" values must be in the selected session language.
 - Integers only.
-- Never use dice notation inside JSON values.
+- Never use dice notation inside state_updates numeric values.
+- weapon_damage may use dice notation like 1D3, 1D4, 1D6, 1D8, 1D10, 2D6+4, 4D6.
+- If the narrative introduces a new distinct place, fill location_name.
+- If the narrative reveals a concrete fact or evidence, fill clue_found and clue_content.
+- If the narrative clearly advances an existing investigation line, fill thread_progress.
+- Leave fields empty only when nothing actually changed in state.
+
+STATE UPDATE ENFORCEMENT
+- If the response reveals a concrete clue, names a new destination, identifies the source of the lead, or changes the current objective, you MUST fill state_updates accordingly.
+- Do not leave state_updates empty when a clue has been materially discovered.
+- If investigators learn where to go next, set clue_found and/or thread_progress and update the objective implicitly through state.
+
+COMBAT PAYLOAD RULES:
+- Use combat_update only when violence, attack, armed threat, or an active combat exchange is occurring.
+- attack_mode must be one of: "", "melee", "firearm", "maneuver", "other".
+- attacker_name and target_name must name actors that already exist in CURRENT GAME STATE.
+- Do not invent new enemies for combat_update. Use only actors from CURRENT GAME STATE.
+- skill_name must be the exact existing skill name from the attacker’s sheet when possible.
+- defender_option must be one of: "", "fight_back", "dodge", "dive_for_cover".
+- Do not narrate final kill/destruction as automatic intent fulfillment. The backend resolves the mechanics.
+- combat_started should become true when the first real attack or active hostile exchange begins.
+- combat_ended should become true only when the fight is clearly over.
+
+ROLL REQUEST RULES:
+- Use roll_request when the player action is challenging and requires a roll before its outcome can be narrated.
+- roll_request.required must be true only when a roll is actually needed now.
+- skill_name must be the exact existing skill or attribute name from CURRENT GAME STATE.
+- action_text should restate the gated action in a short plain form.
+- reason should briefly explain why the roll is needed.
+- When roll_request.required is true, do not narrate the successful completion of that action yet.
+- If no roll is needed, set required=false and leave the other roll_request fields empty.

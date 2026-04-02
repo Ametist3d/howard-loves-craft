@@ -15,6 +15,14 @@ If 2 consecutive responses occur in the same scene, the 3rd response must do one
 - create immediate danger
 - deliver a clue that changes what the investigators now know
 
+OBJECTIVE CONTINUITY RULE
+When CURRENT OBJECTIVE exists, scene progression should not drift away from it for more than one turn without a concrete reason.
+A concrete reason can be:
+- a threat interrupts
+- a new clue changes priorities
+- an NPC redirects the investigation
+- the player deliberately abandons that lead
+
 FORBIDDEN LOOP PATTERNS
 Do not chain these more than once without payoff:
 - corridor -> deeper corridor
@@ -25,3 +33,42 @@ Do not chain these more than once without payoff:
 
 Do not loop atmospheric variations of the same obstacle.
 Do not repeat the same obstacle in slightly different words.
+
+SOCIAL LOOP BREAKER
+Do not allow repeated questioning of the same NPC to produce only escalating suspicion with no payoff.
+If investigators question, pressure, or read the same NPC twice in one scene, the next response must materially change the exchange through at least one of:
+- the NPC reveals a concrete fact
+- the NPC contradicts an earlier statement
+- the NPC names a person, place, object, or event
+- a witness interrupts or overhears
+- the NPC tries to leave, shuts down, threatens, or calls for help
+- outside pressure arrives and forces the scene forward
+
+PSYCHOLOGY PAYOFF RULE
+A successful Psychology roll must not stop at mood-reading.
+After a success, provide at least one actionable takeaway:
+- what topic causes the reaction
+- what the NPC is specifically hiding
+- what leverage the investigators now have
+- where the NPC’s attention shifts
+- what the investigators can do next to exploit the read
+
+BLUEPRINT ACT GATE
+If the AUTHORITATIVE SCENARIO BLUEPRINT contains multiple acts, do not skip from an early act directly into a later-act location or climax beat without an intermediate payoff.
+Before advancing to the next act, the current act should usually produce at least one of:
+- a clue that clearly points forward
+- an NPC revelation that changes the objective
+- a meaningful location transition within the current investigation layer
+- a cost, threat, or irreversible choice that forces escalation
+
+HOOK OBJECT CONTINUITY RULE
+If the scenario hook centers on a specific object, medium, message, recording, device, body, or artifact, do not let it become disposable exposition after one line of dialogue.
+Until it has been meaningfully examined or superseded by a stronger clue in play, it should remain a valid investigative handle.
+
+ESCAPE LOOP BREAKER
+If the last few beats are dominated by pursuit, hiding, alarms, or immediate flight, do not extend the chase indefinitely.
+Within 1-2 more responses, either:
+- let the investigators break contact and reassess what they learned
+- force a decisive confrontation or sacrifice
+- convert the chase into a new concrete clue, loss, or route change
+Do not keep generating interchangeable guards, corridors, doors, or near-captures without a scene reset or real payoff.

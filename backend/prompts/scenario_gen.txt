@@ -4,7 +4,7 @@ Write all prose field values in: {language_name}
 THEMES: {themes}
 ERA/SETTING CONSTRAINT: {era_context}
 Strictly enforce this setting. No 1920s tropes unless the era explicitly states them.
-NAMING CONVENTION: All proper nouns (people, places, artifacts) must fit Lovecraftian, Anglo-Saxon, or Latin tonal logic.
+NAMING CONVENTION: All proper nouns (people, places, artifacts) must fit the setting, era, and social context. Do not reuse unrelated names or hook objects from prior scenarios.
 
 BANNED CLICHÉS — these phrases are forbidden in your output. Replace them with something original and setting-specific:
 - impossible geometry / impossible angles
@@ -20,11 +20,79 @@ BANNED CLICHÉS — these phrases are forbidden in your output. Replace them wit
 {atoms}
 --------------------------
 
-CRITICAL REMIXING RULES:
-- Combine elements from at least 3 different atoms.
-- Invent new locations, NPCs, and plot elements that do NOT appear in any single atom.
-- At least one major plot element (the twist, hidden threat, or core mystery) must be fully original.
-- The atoms are raw material, not templates. Extract moods and concepts, not exact plots.
+--- SCENARIO SEED ---
+{seed}
+---------------------
+
+CRITICAL SYNTHESIS RULES:
+- Preserve the seed's central anomaly, social setup, and investigative premise.
+- Use atoms as support material, not as replacement plots.
+- Prefer coherence over novelty.
+- You may combine elements from multiple atoms, but do NOT overwrite the seed with a stronger stock-horror template.
+- Keep the early scenario close to the seed's ordinary surface situation.
+- Do not introduce a cult, ritual, portal, ancient god, or final-banishing spell unless the seed itself clearly points there.
+- If an atom represents an endgame mechanic, do not let it dominate the hook or early acts.
+- Originality should come from how the seed develops, not from replacing the seed.
+- Do not copy names, objects, or hooks from unrelated scenarios unless they are explicitly present in the seed or atoms.
+
+STRUCTURE RULES
+- Generate exactly 4 acts.
+- Acts 1-3 must each contain 2-4 scenes.
+- Act 4 must contain 1-3 scenes.
+- Total scene count must be between 8 and 12.
+- The scenario must not be solvable in a single clue chain or one uninterrupted push forward.
+- Each act must have a distinct investigative purpose:
+  - Act 1: establish the ordinary surface situation, the first anomaly, and at least one competing explanation.
+  - Act 2: deepen the investigation through discovery, social conflict, obstruction, or danger.
+  - Act 3: introduce a reversal, betrayal, contradiction, false conclusion, or recontextualization that changes the investigators' understanding.
+  - Act 4: deliver the climax, hard choice, or final confrontation with more than one possible solution, tradeoff, or cost.
+- Do not make the final solution a single object destruction unless that action has been heavily set up, carries a cost, and is not the only viable approach.
+- Do not allow the scenario to move from hook to culprit to final confrontation in a straight line.
+
+TWIST AND REVERSAL RULES
+- Include at least:
+  - 2 misleading surface explanations or false leads
+  - 2 midpoint revelations that recontextualize earlier clues
+  - 1 final twist, betrayal, or hard choice in the climax
+- The hidden threat must not be fully inferable from the inciting hook alone.
+- At least one important NPC must be more complicated than they first appear.
+- At least one clue must appear to support the wrong theory before later evidence overturns it.
+
+INVESTIGATION DEPTH RULE
+- Provide layered investigation, not a straight line.
+- Include at least 6 clues total.
+- Include at least 2 clues that initially point to the wrong explanation.
+- Include at least 2 clues that contradict an earlier assumption.
+- Include at least 2 plot threads that can be pursued in parallel.
+- Investigators should need to compare clues, not merely follow a single breadcrumb path.
+
+SCENARIO BACKBONE RULE
+- Before writing acts and scenes, internally design a dramatic backbone with:
+  - a surface explanation
+  - an actual explanation
+  - false leads
+  - contradictions
+  - reversals
+  - dynamic pressures
+  - climax choices with costs
+- Then express that backbone through the acts/scenes JSON below.
+- The final JSON must include the scenario_engine object.
+
+VALIDITY REQUIREMENTS
+Your output is invalid unless all of the following are true:
+- exactly 4 acts are present
+- total scene count is between 8 and 12
+- Acts 1-3 each contain at least 2 scenes
+- at least 6 clues are present
+- at least 2 twists are present
+- at least 2 plot threads are present
+- the climax offers more than one possible resolution, cost, or tradeoff
+- the investigation includes at least one false lead and at least one contradiction
+If any of these conditions are missing, revise the scenario before outputting the JSON.
+
+SEED PRIORITY RULE
+- The scenario seed is the primary source of truth for the hook, social setup, and central anomaly.
+- Atoms may enrich, sharpen, or escalate the seed, but must not replace it.
 
 OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
 {{
@@ -35,58 +103,214 @@ OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
   "core_mystery": "The central secret investigators uncover at the end (1-2 sentences)",
   "hidden_threat": "The Mythos entity or force at work, its goal, and its method (2-3 sentences)",
   "truth_the_players_never_suspect": "The single biggest twist — something that recontextualizes everything once revealed (1-2 sentences)",
+  "scenario_engine": {{
+    "surface_explanation": "The most plausible early explanation that seems true at first",
+    "actual_explanation": "What is really happening underneath the surface situation",
+    "false_leads": [
+      "False lead 1",
+      "False lead 2"
+    ],
+    "contradictions": [
+      "Contradiction 1",
+      "Contradiction 2"
+    ],
+    "reversals": [
+      "Reversal 1",
+      "Reversal 2"
+    ],
+    "dynamic_pressures": [
+      "time pressure",
+      "social pressure"
+    ],
+    "climax_choices": [
+      {{
+        "option": "A possible climax solution",
+        "cost": "What it costs",
+        "consequence": "What happens if chosen"
+      }},
+      {{
+        "option": "Another possible climax solution",
+        "cost": "What it costs",
+        "consequence": "What happens if chosen"
+      }}
+    ]
+  }},
   "acts": [
     {{
       "act": 1,
-      "title": "Act title",
-      "summary": "What happens in this act — the investigators' situation and objective (2-3 sentences)",
+      "title": "Act 1 title",
+      "summary": "Surface situation, first anomaly, and first competing interpretations (2-4 sentences)",
+      "purpose": "Establish the ordinary surface situation and introduce conflicting explanations",
+      "belief_shift": "What investigators think at the start versus what they suspect by the end of the act",
+      "required_payoffs": [
+        "first anomaly",
+        "first contradiction"
+      ],
       "scenes": [
         {{
-          "scene": "Scene name",
+          "scene": "Scene 1 name",
           "location": "Location name",
+          "scene_function": "hook|misdirection|social pressure|clue reveal|danger escalation",
+          "dramatic_question": "What uncertainty or tension defines this scene",
+          "entry_condition": "Why this scene becomes available now",
+          "exit_condition": "What must be learned, decided, or suffered before moving on",
           "trigger": "What causes investigators to come here or this scene to begin",
-          "description": "What the investigators experience when they arrive — sights, sounds, mood (2-3 sentences)",
-          "what_happens": "The key event, encounter, or discovery in this scene (2-3 sentences)",
+          "description": "What the investigators experience when they arrive — sights, sounds, mood (2-4 sentences)",
+          "what_happens": "The key event, encounter, or discovery in this scene (2-4 sentences)",
+          "pressure_if_delayed": "What gets worse if investigators stall here",
+          "reveals": ["What this scene can reveal"],
+          "conceals": ["What still remains hidden here"],
           "clues_available": ["Clue title 1", "Clue title 2"],
           "npc_present": ["NPC name"],
           "threat_level": "none|tension|danger|combat",
-          "keeper_notes": "Behind-the-scenes guidance — what the Keeper should emphasize or hide (1-2 sentences)"
+          "keeper_notes": "Behind-the-scenes guidance — what the Keeper should emphasize, conceal, or misdirect (1-3 sentences)"
+        }},
+        {{
+          "scene": "Scene 2 name",
+          "location": "Location name",
+          "scene_function": "hook|misdirection|social pressure|clue reveal|danger escalation",
+          "dramatic_question": "What uncertainty or tension defines this scene",
+          "entry_condition": "Why this scene becomes available now",
+          "exit_condition": "What must be learned, decided, or suffered before moving on",
+          "trigger": "What leads here from the previous scene",
+          "description": "Atmospheric arrival description",
+          "what_happens": "A second key development, contradiction, or obstacle",
+          "pressure_if_delayed": "What gets worse if investigators stall here",
+          "reveals": ["What this scene can reveal"],
+          "conceals": ["What still remains hidden here"],
+          "clues_available": ["Clue title 3"],
+          "npc_present": [],
+          "threat_level": "none|tension|danger|combat",
+          "keeper_notes": "Keeper guidance"
         }}
       ]
     }},
     {{
       "act": 2,
-      "title": "Act title",
-      "summary": "Rising tension — investigators dig deeper, things get worse (2-3 sentences)",
+      "title": "Act 2 title",
+      "summary": "Investigation deepens, pressure rises, and new complications emerge (2-4 sentences)",
+      "purpose": "Deepen the investigation through discovery, social conflict, obstruction, or danger",
+      "belief_shift": "How the investigators' understanding becomes more complex",
+      "required_payoffs": [
+        "one false lead strengthened",
+        "one real lead deepened"
+      ],
       "scenes": [
         {{
-          "scene": "Scene name",
+          "scene": "Scene 1 name",
           "location": "Location name",
+          "scene_function": "investigation|obstruction|social conflict|danger escalation",
+          "dramatic_question": "What uncertainty or tension defines this scene",
+          "entry_condition": "Why this scene becomes available now",
+          "exit_condition": "What must be learned, decided, or suffered before moving on",
           "trigger": "What triggers this scene",
           "description": "Atmospheric arrival description",
-          "what_happens": "Key event or discovery",
-          "clues_available": [],
+          "what_happens": "Key event, discovery, obstruction, or danger",
+          "pressure_if_delayed": "What gets worse if investigators stall here",
+          "reveals": ["What this scene can reveal"],
+          "conceals": ["What still remains hidden here"],
+          "clues_available": ["Clue title 4"],
+          "npc_present": ["NPC name"],
+          "threat_level": "tension|danger|combat",
+          "keeper_notes": "Keeper guidance"
+        }},
+        {{
+          "scene": "Scene 2 name",
+          "location": "Location name",
+          "scene_function": "investigation|obstruction|social conflict|danger escalation",
+          "dramatic_question": "What uncertainty or tension defines this scene",
+          "entry_condition": "Why this scene becomes available now",
+          "exit_condition": "What must be learned, decided, or suffered before moving on",
+          "trigger": "What leads investigators here",
+          "description": "Atmospheric arrival description",
+          "what_happens": "Another discovery, conflict, or setback",
+          "pressure_if_delayed": "What gets worse if investigators stall here",
+          "reveals": ["What this scene can reveal"],
+          "conceals": ["What still remains hidden here"],
+          "clues_available": ["Clue title 5"],
           "npc_present": [],
-          "threat_level": "tension|danger",
+          "threat_level": "tension|danger|combat",
           "keeper_notes": "Keeper guidance"
         }}
       ]
     }},
     {{
       "act": 3,
-      "title": "Climax act title",
-      "summary": "Confrontation with the true threat — all threads converge (2-3 sentences)",
+      "title": "Act 3 title",
+      "summary": "A reversal, betrayal, or contradiction changes the investigators' understanding (2-4 sentences)",
+      "purpose": "Recontextualize earlier clues and force a new understanding",
+      "belief_shift": "What they believed before the reversal and what they believe after it",
+      "required_payoffs": [
+        "one contradiction resolved",
+        "one reversal delivered"
+      ],
       "scenes": [
         {{
-          "scene": "Final confrontation scene name",
-          "location": "Lair or climax location",
-          "trigger": "What forces investigators here",
-          "description": "The horror of what they find",
-          "what_happens": "How the climax plays out — what investigators must do to succeed or survive",
+          "scene": "Scene 1 name",
+          "location": "Location name",
+          "scene_function": "reversal|betrayal|contradiction|danger escalation",
+          "dramatic_question": "What uncertainty or tension defines this scene",
+          "entry_condition": "Why this scene becomes available now",
+          "exit_condition": "What must be learned, decided, or suffered before moving on",
+          "trigger": "What triggers the reversal",
+          "description": "Atmospheric arrival description",
+          "what_happens": "A revelation or contradiction changes the meaning of earlier clues",
+          "pressure_if_delayed": "What gets worse if investigators stall here",
+          "reveals": ["What this scene can reveal"],
+          "conceals": ["What still remains hidden here"],
+          "clues_available": ["Clue title 6"],
+          "npc_present": ["NPC name"],
+          "threat_level": "tension|danger|combat",
+          "keeper_notes": "Keeper guidance"
+        }},
+        {{
+          "scene": "Scene 2 name",
+          "location": "Location name",
+          "scene_function": "reassessment|choice|danger escalation",
+          "dramatic_question": "What uncertainty or tension defines this scene",
+          "entry_condition": "Why this scene becomes available now",
+          "exit_condition": "What must be learned, decided, or suffered before moving on",
+          "trigger": "What follows from the revelation",
+          "description": "Atmospheric arrival description",
+          "what_happens": "Investigators must reassess, choose, or act under new understanding",
+          "pressure_if_delayed": "What gets worse if investigators stall here",
+          "reveals": ["What this scene can reveal"],
+          "conceals": ["What still remains hidden here"],
           "clues_available": [],
           "npc_present": [],
           "threat_level": "danger|combat",
-          "keeper_notes": "Win/lose conditions, escape routes, what happens if they fail"
+          "keeper_notes": "Keeper guidance"
+        }}
+      ]
+    }},
+    {{
+      "act": 4,
+      "title": "Climax act title",
+      "summary": "All threads converge into confrontation, sacrifice, escape, or a hard choice (2-4 sentences)",
+      "purpose": "Deliver the climax and force a costly resolution",
+      "belief_shift": "What the investigators finally understand and what they must now decide",
+      "required_payoffs": [
+        "multiple possible resolutions",
+        "costly choice or tradeoff"
+      ],
+      "scenes": [
+        {{
+          "scene": "Final confrontation scene name",
+          "location": "Climax location",
+          "scene_function": "climax|hard choice|final confrontation",
+          "dramatic_question": "What must the investigators sacrifice, protect, or decide",
+          "entry_condition": "Why this scene becomes unavoidable now",
+          "exit_condition": "What resolves the scenario from here",
+          "trigger": "What forces investigators here",
+          "description": "The horror of what they find",
+          "what_happens": "How the climax plays out — include multiple possible solutions, costs, or tradeoffs",
+          "pressure_if_delayed": "What gets worse each moment investigators hesitate",
+          "reveals": ["What this scene finally reveals"],
+          "conceals": ["What still remains uncertain even here"],
+          "clues_available": [],
+          "npc_present": ["NPC name"],
+          "threat_level": "danger|combat",
+          "keeper_notes": "Win/lose conditions, hard choices, escape routes, and what happens if they fail"
         }}
       ]
     }}
@@ -102,7 +326,9 @@ OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
       "secret": "What they truly are or hide (1 sentence)",
       "motivation": "What they want and why (1 sentence)",
       "when_encountered": "Which act/scene they appear in",
-      "behavior_if_pressured": "How they react under interrogation or threat (1 sentence)"
+      "behavior_if_pressured": "How they react under interrogation or threat (1 sentence)",
+      "apparent_loyalty": "Who they seem aligned with at first",
+      "actual_loyalty": "Who or what they really serve, if different"
     }}
   ],
   "clues": [
@@ -112,7 +338,8 @@ OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
       "true_meaning": "What it actually implies — the deeper truth (1 sentence)",
       "location": "Location name where found",
       "leads_to": "Scene or location this clue points toward",
-      "skill_to_find": "Skill name required, or 'none' if visible"
+      "skill_to_find": "Skill name required, or 'none' if visible",
+      "appears_to_prove": "What wrong theory this clue may seem to support at first"
     }}
   ],
   "clue_chain": [

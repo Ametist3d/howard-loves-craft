@@ -139,6 +139,12 @@ function App() {
     }]);
 
     setSuggestedActions(response.suggested_actions || []);
+    if (response.roll_request?.required && response.roll_request.skill_name) {
+      const resolved = resolveSkillTarget(response.roll_request.skill_name);
+      if (resolved) setAutoSkill(resolved);
+      setPendingRolledAction(response.roll_request.action_text || null);
+      addMessage(MessageSender.SYSTEM, `🎯 Skill check ready: ${response.roll_request.skill_name}. Roll d100 and click CONFIRM.`);
+    }
     if (response.roll_resolution?.outcome && response.roll_resolution.roll_type === "skill_check") {
       const outcomeLabel = formatRollOutcomeLabel(response.roll_resolution.outcome);
       if (outcomeLabel) {
@@ -310,6 +316,12 @@ function App() {
             : m
         ));
         setSuggestedActions(result.suggested_actions || []);
+        if (result.roll_request?.required && result.roll_request.skill_name) {
+          const resolved = resolveSkillTarget(result.roll_request.skill_name);
+          if (resolved) setAutoSkill(resolved);
+          setPendingRolledAction(result.roll_request.action_text || null);
+          addMessage(MessageSender.SYSTEM, `🎯 Skill check ready: ${result.roll_request.skill_name}. Roll d100 and click CONFIRM.`);
+        }
         if (result.state_updates || result.updated_actor) handleStateUpdate(result);
         // Poll for image — detached, does not block input
         if (result.generation_id) {

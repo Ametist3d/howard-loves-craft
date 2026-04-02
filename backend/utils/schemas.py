@@ -2,6 +2,13 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 
 
+class RollRequest(BaseModel):
+    required: bool = False
+    skill_name: Optional[str] = None
+    action_text: Optional[str] = None
+    reason: Optional[str] = None
+
+
 class RollResolution(BaseModel):
     investigator: Optional[str] = None
     skill: Optional[str] = None
@@ -24,6 +31,7 @@ class ChatResponse(BaseModel):
     suggested_actions: List[str] = []
     state_updates: Optional[Dict[str, Any]] = None
     roll_resolution: Optional[RollResolution] = None
+    roll_request: Optional[RollRequest] = None
     image_url: Optional[str] = None
     generation_id: Optional[str] = None 
 

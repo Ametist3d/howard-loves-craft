@@ -89,6 +89,14 @@ export interface GameState {
   settings: AppSettings;
 }
 
+
+export interface RollRequest {
+  required: boolean;
+  skill_name?: string;
+  action_text?: string;
+  reason?: string;
+}
+
 export interface RollResolution {
   investigator?: string;
   skill?: string;
@@ -106,6 +114,7 @@ export interface ChatResponse {
   visual_prompt?: string;
   suggested_actions: string[];
   roll_resolution?: RollResolution;
+  roll_request?: RollRequest;
   state_updates?: {
     character_name?: string;
     hp_change?: number;
