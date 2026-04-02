@@ -21,6 +21,7 @@ _DOUBLE_BRACE_RE = re.compile(r"\{\{|\}\}")
 PROMPT_FILENAMES = (
     "character_gen.txt",
     "scenario_gen.txt",
+    # Keeper control prompts are intentionally kept in English only.
     "keeper/header.txt",
     "keeper/core_identity.txt",
     "keeper/output_contract.txt",
@@ -29,6 +30,16 @@ PROMPT_FILENAMES = (
     "keeper/scene_progression.txt",
     "keeper/opening_scene.txt",
 )
+
+ENGLISH_ONLY_PROMPTS = {
+    "keeper/header.txt",
+    "keeper/core_identity.txt",
+    "keeper/output_contract.txt",
+    "keeper/action_adjudication.txt",
+    "keeper/roll_resolution.txt",
+    "keeper/scene_progression.txt",
+    "keeper/opening_scene.txt",
+}
 
 LANGUAGE_LABELS = {
     "ua": "Ukrainian",
@@ -144,7 +155,7 @@ def ensure_translated_prompts(session_id: str, language: str, filenames: Iterabl
         with open(src_path, "r", encoding="utf-8") as f:
             source_text = f.read()
 
-        if filename == "keeper/output_contract.txt":
+        if filename in ENGLISH_ONLY_PROMPTS:
             translated = source_text
         else:
             translated = _translate_text(source_text, language)

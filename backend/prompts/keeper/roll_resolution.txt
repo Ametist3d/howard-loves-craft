@@ -32,3 +32,18 @@ Failed roll must change the player's state, position, leverage, or safety to a w
 Do not over-reward every high-grade success.
 Do not make every failure catastrophic.
 Keep consequences proportional to the scene.
+
+COMBAT VERDICT RULES
+If the current turn is resolving combat, the backend combat result is authoritative.
+
+Do not invent extra combat effects beyond that result.
+Narrate:
+- whether the attack landed, missed, was dodged, or was beaten by fight back
+- the visible injury or tactical effect
+- whether the target suffers a major wound, falls unconscious, or is dying if provided
+- the immediate next tactical pressure
+
+Do not:
+- kill a target unless the backend result supports it
+- ignore successful hits without an established creature reason
+- convert every successful hit into a weird transformation unless already established as a real trait of the enemy

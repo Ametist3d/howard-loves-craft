@@ -575,24 +575,34 @@ class SessionDB:
         pcs = self.list_actors("PC")
         npcs = self.list_actors("NPC")
 
-        def actor_line(a: Dict[str, Any]) -> str:
+        def actor_line(a: Dict[str, Any], *, include_all_skills: bool = False) -> str:
             skills = a.get("skills") or {}
-            top = [(k, v) for k, v in skills.items() if v > 20]
-            top = sorted(top, key=lambda kv: kv[1], reverse=True)
-            top_s = ", ".join([f"{k} {v}" for k, v in top]) if top else ""
+            if include_all_skills:
+                skill_items = sorted(skills.items(), key=lambda kv: kv[0].lower())
+            else:
+                skill_items = [(k, v) for k, v in skills.items() if v > 20]
+                skill_items = sorted(skill_items, key=lambda kv: kv[1], reverse=True)
+
+            skills_s = ", ".join([f"{k} {v}" for k, v in skill_items]) if skill_items else ""
+
             stats = []
-            for k in ["str","con","dex","int","app","pow","siz","edu"]:
+            for k in ["str", "con", "dex", "int", "app", "pow", "siz", "edu"]:
                 if a.get(k) is not None:
                     stats.append(f"{k.upper()} {a.get(k)}")
             stats_s = ", ".join(stats)
+
             parts = [a["name"]]
-            if a.get("san") is not None: parts.append(f"SAN {a['san']}")
-            if a.get("hp") is not None: parts.append(f"HP {a['hp']}")
-            if stats_s: parts.append(stats_s)
-            if top_s: parts.append(f"Skills: {top_s}")
+            if a.get("san") is not None:
+                parts.append(f"SAN {a['san']}")
+            if a.get("hp") is not None:
+                parts.append(f"HP {a['hp']}")
+            if stats_s:
+                parts.append(stats_s)
+            if skills_s:
+                parts.append(f"Skills: {skills_s}")
             return " — ".join(parts)
 
-        investigators_text = "\n".join([f"- {actor_line(a)}" for a in pcs]) if pcs else "(none)"
+        investigators_text = "\n".join([f"- {actor_line(a, include_all_skills=True)}" for a in pcs]) if pcs else "(none)"
         npcs_text = "\n".join([f"- {actor_line(a)}" for a in npcs[:8]]) if npcs else "(none)"
 
         loc_id = None

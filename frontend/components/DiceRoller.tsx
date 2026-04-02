@@ -40,16 +40,16 @@ export const DiceRoller: React.FC<DiceRollerProps> = ({ investigators, onRoll, o
               if (skill) {
                   setSelectedSkill(`${skill.name}|${skill.value}`);
               } else {
-                   if (search.includes('сил') || search.includes('str')) setSelectedSkill(`Сила (STR)|${chars.STR}`);
-                   else if (search.includes('вын') || search.includes('con')) setSelectedSkill(`Телосложение (CON)|${chars.CON}`);
-                   else if (search.includes('тел') || search.includes('siz')) setSelectedSkill(`Размер (SIZ)|${chars.SIZ}`);
-                   else if (search.includes('лвк') || search.includes('dex')) setSelectedSkill(`Ловкость (DEX)|${chars.DEX}`);
-                   else if (search.includes('нар') || search.includes('app')) setSelectedSkill(`Внешность (APP)|${chars.APP}`);
-                   else if (search.includes('инт') || search.includes('int')) setSelectedSkill(`Интеллект (INT)|${chars.INT}`);
-                   else if (search.includes('мощ') || search.includes('pow')) setSelectedSkill(`Воля (POW)|${chars.POW}`);
-                   else if (search.includes('обр') || search.includes('edu')) setSelectedSkill(`Образование (EDU)|${chars.EDU}`);
-                   else if (search.includes('удача') || search.includes('luck')) setSelectedSkill(`Удача (Luck)|${inv.attributes.Luck.current}`);
-                   else if (search.includes('рассудок') || search.includes('san')) setSelectedSkill(`Рассудок (Sanity)|${inv.attributes.Sanity.current}`);
+                    if (search.includes('str')) setSelectedSkill(`STR|${chars.STR}`);
+                    else if (search.includes('con')) setSelectedSkill(`CON|${chars.CON}`);
+                    else if (search.includes('siz')) setSelectedSkill(`SIZ|${chars.SIZ}`);
+                    else if (search.includes('dex')) setSelectedSkill(`DEX|${chars.DEX}`);
+                    else if (search.includes('app')) setSelectedSkill(`APP|${chars.APP}`);
+                    else if (search.includes('int')) setSelectedSkill(`INT|${chars.INT}`);
+                    else if (search.includes('pow')) setSelectedSkill(`POW|${chars.POW}`);
+                    else if (search.includes('edu')) setSelectedSkill(`EDU|${chars.EDU}`);
+                    else if (search.includes('luck')) setSelectedSkill(`Luck|${inv.attributes.Luck.current}`);
+                    else if (search.includes('san')) setSelectedSkill(`Sanity|${inv.attributes.Sanity.current}`);
               }
           }
       }
@@ -143,18 +143,18 @@ export const DiceRoller: React.FC<DiceRollerProps> = ({ investigators, onRoll, o
       const options = [];
       const chars = inv.characteristics;
 
-      options.push(<option key="str" value={`Сила (STR)|${chars.STR}`}>СИЛ (STR) ({chars.STR})</option>);
-      options.push(<option key="con" value={`Телосложение (CON)|${chars.CON}`}>ТЕЛ (CON) ({chars.CON})</option>);
-      options.push(<option key="siz" value={`Размер (SIZ)|${chars.SIZ}`}>РАЗ (SIZ) ({chars.SIZ})</option>);
-      options.push(<option key="dex" value={`Ловкость (DEX)|${chars.DEX}`}>ЛВК (DEX) ({chars.DEX})</option>);
-      options.push(<option key="app" value={`Внешность (APP)|${chars.APP}`}>ВНШ (APP) ({chars.APP})</option>);
-      options.push(<option key="int" value={`Интеллект (INT)|${chars.INT}`}>ИНТ (INT) ({chars.INT})</option>);
-      options.push(<option key="pow" value={`Воля (POW)|${chars.POW}`}>МОЩ (POW) ({chars.POW})</option>);
-      options.push(<option key="edu" value={`Образование (EDU)|${chars.EDU}`}>ОБР (EDU) ({chars.EDU})</option>);
+      options.push(<option key="str" value={`STR|${chars.STR}`}>STR ({chars.STR})</option>);
+      options.push(<option key="con" value={`CON|${chars.CON}`}>CON ({chars.CON})</option>);
+      options.push(<option key="siz" value={`SIZ|${chars.SIZ}`}>SIZ ({chars.SIZ})</option>);
+      options.push(<option key="dex" value={`DEX|${chars.DEX}`}>DEX ({chars.DEX})</option>);
+      options.push(<option key="app" value={`APP|${chars.APP}`}>APP ({chars.APP})</option>);
+      options.push(<option key="int" value={`INT|${chars.INT}`}>INT ({chars.INT})</option>);
+      options.push(<option key="pow" value={`POW|${chars.POW}`}>POW ({chars.POW})</option>);
+      options.push(<option key="edu" value={`EDU|${chars.EDU}`}>EDU ({chars.EDU})</option>);
 
       if (inv.attributes && inv.attributes.Luck && inv.attributes.Sanity) {
-          options.push(<option key="luck" value={`Удача (Luck)|${inv.attributes.Luck.current}`}>Удача ({inv.attributes.Luck.current})</option>);
-          options.push(<option key="san" value={`Рассудок (Sanity)|${inv.attributes.Sanity.current}`}>Рассудок ({inv.attributes.Sanity.current})</option>);
+          options.push(<option key="luck" value={`Luck|${inv.attributes.Luck.current}`}>Luck ({inv.attributes.Luck.current})</option>);
+          options.push(<option key="san" value={`Sanity|${inv.attributes.Sanity.current}`}>Sanity ({inv.attributes.Sanity.current})</option>);
       }
       options.push(<option disabled key="sep1">──────────</option>);
 
