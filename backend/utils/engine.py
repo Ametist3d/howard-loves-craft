@@ -13,12 +13,14 @@ from utils.db_session import SessionDB, create_session_db_file
 from utils.schemas import CharGenRequest, StartSessionRequest, ChatRequest
 from utils.helpers import (
     read_prompt, extract_json, get_chat_history, get_llm, compress_story,
-    build_scene_prompt, generate_avatar_logic, apply_state_updates,
+    build_scene_prompt, apply_state_updates, looks_like_valid_keeper_response,
+    validate_opening_scene_response,   build_opening_fallback_result,
     normalize_language_code, get_language_name, assemble_keeper_prompt,
-    infer_scene_stall_level, build_verdict_guard, extract_last_turn_ban,
+    build_verdict_guard, extract_last_turn_ban, sanitize_llm_result_on_validation_failure,
     has_roll_verdict, build_scene_loop_guard, build_authoritative_context,
     build_stall_forcing_guard, intercept_player_action_for_roll_gate,
-    clear_pending_roll, save_pending_roll
+    clear_pending_roll, save_pending_roll, validate_llm_response_against_state,
+    localize_opening_result_fields, extract_blueprint_json
 )
 
 from utils.combat import (
@@ -106,8 +108,10 @@ except Exception as e:
 
 
 async def generate_character_logic(req: CharGenRequest) -> dict:
-    language = normalize_language_code(req.language)
-    prompt_dir = ensure_translated_prompts("global_chargen", language)
+    session_id = "local_session"
+
+    lang = normalize_language_code(req.language)
+    prompt_dir = ensure_translated_prompts(session_id, lang)
 
     llm = get_llm(temperature=0.7)
     chain = PromptTemplate.from_template(
@@ -115,14 +119,155 @@ async def generate_character_logic(req: CharGenRequest) -> dict:
     ) | llm
 
     response_text = chain.invoke({
-        "language": language,
-        "language_name": get_language_name(language),
+        "language": lang,
+        "language_name": get_language_name(lang),
         "prompt": req.prompt,
         "era_context": req.era_context or "1920s Lovecraftian Horror — default if no setting selected",
     })
 
     
     return extract_json(response_text)
+
+async def generate_opening_scene_logic(db: SessionDB, session_id: str = "local_session") -> dict:
+    cur = db.conn.cursor()
+
+    cur.execute("SELECT value FROM kv_store WHERE key='scenario_atoms'")
+    row_atoms = cur.fetchone()
+    campaign_atoms = row_atoms["value"] if row_atoms else ""
+
+    cur.execute("SELECT value FROM kv_store WHERE key='scenario_themes'")
+    row_themes = cur.fetchone()
+    themes = row_themes["value"] if row_themes else "STANDARD"
+
+    cur.execute("SELECT value FROM kv_store WHERE key='scenario_setting'")
+    row_setting = cur.fetchone()
+    setting_override = row_setting["value"] if row_setting else "Lovecraftian Horror Lore"
+
+    cur.execute("SELECT value FROM kv_store WHERE key='era_context'")
+    row_era = cur.fetchone()
+    era_override = row_era["value"] if row_era else "1920s Lovecraftian Horror"
+
+    cur.execute("SELECT value FROM kv_store WHERE key='language'")
+    row_lang = cur.fetchone()
+    session_language = normalize_language_code(row_lang["value"] if row_lang else "en")
+
+    cur.execute("SELECT value FROM kv_store WHERE key='prompt_dir'")
+    row_prompt_dir = cur.fetchone()
+    prompt_dir = row_prompt_dir["value"] if row_prompt_dir else None
+
+    context_str, state_str = build_authoritative_context(
+        db,
+        campaign_atoms=campaign_atoms,
+        themes=themes,
+    )
+
+    keeper_system_prompt = assemble_keeper_prompt(
+        include_roll_resolution=False,
+        include_scene_progression=False,
+        include_opening_scene=True,
+        prompt_dir=prompt_dir,
+    )
+
+    llm = get_llm(temperature=0.2)
+    chain = PromptTemplate.from_template(keeper_system_prompt) | llm
+
+    opening_action = (
+        "Open the scenario with the first playable scene only. "
+        "Anchor the investigators in the current scene and current scene location. "
+        "Do not skip ahead. "
+        "Do not require a roll unless immediate uncertainty is already established. "
+        "Provide exactly three actionable suggested actions."
+    )
+
+    prompt_vars = {
+        "language": session_language,
+        "language_name": get_language_name(session_language),
+        "campaign_context": (
+            context_str
+            + "\n\n--- CURRENT GAME STATE ---\n"
+            + state_str
+        ),
+        "era_context": setting_override + " " + era_override,
+        "history": "",
+        "action": opening_action,
+        "last_turn_ban": "",
+    }
+
+    response_text = chain.invoke(prompt_vars)
+
+    logger.info(
+        "generate_opening_scene_logic(): raw LLM response preview: %r",
+        str(response_text)[:4000]
+    )
+
+    result = extract_json(response_text)
+
+    # One-shot contract repair only for malformed/non-contract opening replies
+    if not looks_like_valid_keeper_response(str(response_text), result):
+        logger.warning("Opening scene contract failure; attempting one repair regeneration")
+
+        repair_prompt = (
+            "Your previous reply violated the required Keeper output contract.\n"
+            "Return ONLY a valid <SYSTEM_RESPONSE_JSON>...</SYSTEM_RESPONSE_JSON> block.\n"
+            "Do not ask the user for clarification.\n"
+            "Do not explain your answer.\n"
+            "Do not output markdown.\n"
+            "Preserve the same opening scene, current scene, and current game state.\n"
+        )
+
+        repaired_vars = dict(prompt_vars)
+        repaired_vars["campaign_context"] = (
+            context_str
+            + "\n\n--- CURRENT GAME STATE ---\n"
+            + state_str
+            + "\n\n--- CONTRACT REPAIR NOTICE ---\n"
+            + repair_prompt
+        )
+
+        repaired_text = chain.invoke(repaired_vars)
+
+        logger.warning("Opening repair raw preview: %r", str(repaired_text)[:2000])
+
+        repaired_result = extract_json(repaired_text)
+        if looks_like_valid_keeper_response(str(repaired_text), repaired_result):
+            result = repaired_result
+
+    # Opening-specific validator, lighter than normal turn validator
+    opening_violations = validate_opening_scene_response(db, result)
+    if opening_violations:
+        logger.warning("Opening scene validation failed: %s", opening_violations)
+        db.log_event("OPENING_VALIDATION_FAIL", {
+            "violations": opening_violations,
+            "narrative": result.get("narrative", "")[:500]
+        })
+
+        # Deterministic fallback in English first
+        result = build_opening_fallback_result(db)
+
+        # Then translate only user-facing fields to selected session language
+        result = localize_opening_result_fields(result, session_language)
+
+    rr = result.get("roll_request") or {}
+    if rr.get("required"):
+        save_pending_roll(db, rr)
+    else:
+        clear_pending_roll(db)
+
+    # Opening is system-generated, so do not create a fake User chat message
+    db.log_event("SYS_OPENING_SCENE", {"content": "Opening scene generated"})
+    db.log_event("CHAT", {"role": "Keeper", "content": result.get("narrative", "")})
+
+    cur.execute("SELECT value FROM kv_store WHERE key='turn_count'")
+    row_tc = cur.fetchone()
+    turn_count = int(row_tc["value"]) + 1 if row_tc else 1
+    cur.execute(
+        "INSERT OR REPLACE INTO kv_store (key, value) VALUES ('turn_count', ?)",
+        (str(turn_count),)
+    )
+    db.conn.commit()
+
+    apply_state_updates(db, result)
+    return result
 
 async def start_session_logic(req: StartSessionRequest) -> dict:
     session_id = "local_session"
@@ -214,10 +359,7 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
                 f"SCENARIO TITLE: {blueprint.get('title', 'Unknown')}\n"
                 f"SETTING: {blueprint.get('era_and_setting', '')}\n"
                 f"HOOK: {blueprint.get('inciting_hook', '')}\n"
-                f"CORE MYSTERY: {blueprint.get('core_mystery', '')}\n"
                 f"KEY NPC: {blueprint.get('key_npc', '')}\n"
-                f"HIDDEN THREAT: {blueprint.get('hidden_threat', '')}\n"
-                f"PLOT TWISTS: {' | '.join(blueprint.get('plot_twists', []))}\n"
                 f"ATMOSPHERE: {blueprint.get('atmosphere_notes', '')}"
             )
             logger.info(f"Prebuilt blueprint extracted: {blueprint.get('title', '?')}")
@@ -293,12 +435,18 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
         def _is_useful_atom(doc) -> bool:
             text = (doc.page_content or "").strip()
             meta = getattr(doc, "metadata", {}) or {}
-            role = str(meta.get("role", "")).lower()
-            abstraction = str(meta.get("abstraction", "")).lower()
+            role = str(meta.get("role", "") or "").lower()
+            abstraction = str(meta.get("abstraction", "") or "").lower()
+            atom_type = str(meta.get("type", "") or "").lower()
+            title_en = str(meta.get("title_en", "") or "").lower()
+            display_name = str(meta.get("display_name", "") or "").lower()
 
-            if len(text) < 180:
+            signal_text = " ".join(x for x in [text, abstraction, title_en, display_name] if x).strip()
+            if len(signal_text) < 80:
                 return False
             if text.lower().startswith("(implied from context"):
+                return False
+            if atom_type in {"appendix_character", "timeline"} and len(signal_text) < 140:
                 return False
             if role.startswith("worldbuilding") or role.startswith("atmosphere"):
                 if "anomaly" not in abstraction and "discovery" not in abstraction and "mystery" not in abstraction:
@@ -313,7 +461,9 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
                 meta = getattr(doc, "metadata", {}) or {}
                 key = (
                     meta.get("source", ""),
-                    meta.get("Header_2", ""),
+                    meta.get("display_name", "") or meta.get("title_en", "") or meta.get("Header_2", ""),
+                    meta.get("type", ""),
+                    meta.get("role", ""),
                     (doc.page_content or "").strip()[:180],
                 )
                 if key in seen:
@@ -358,9 +508,14 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
         for doc in scen_docs:
             text = (doc.page_content or "").strip().lower()
             meta = getattr(doc, "metadata", {}) or {}
-            abstraction = str(meta.get("abstraction", "")).lower()
-            role = str(meta.get("role", "")).lower()
-            header = str(meta.get("Header_2", "")).lower()
+            abstraction = str(meta.get("abstraction", "") or "").lower()
+            role = str(meta.get("role", "") or "").lower()
+            header = str(meta.get("Header_2", "") or "").lower()
+            atom_type = str(meta.get("type", "") or "").lower()
+            archetype = str(meta.get("archetype", "") or "").lower()
+            title_en = str(meta.get("title_en", "") or "").lower()
+            display_name = str(meta.get("display_name", "") or "").lower()
+            aliases = str(meta.get("aliases", "") or "").lower()
 
             score = 0
 
@@ -371,9 +526,24 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
                     score += 2
                 if term in header:
                     score += 1
+                if term in title_en:
+                    score += 4
+                if term in display_name:
+                    score += 4
+                if term in aliases:
+                    score += 2
+                if term in archetype:
+                    score += 2
+                if term in atom_type:
+                    score += 1
+
+            if atom_type in ("clue", "event", "npc", "location"):
+                score += 2
+            if atom_type in ("appendix_character", "timeline"):
+                score -= 1
 
             # prefer investigation / clue / social discovery over late climax
-            if any(x in role for x in ("clue", "investigation", "information", "mystery", "social")):
+            if any(x in role for x in ("clue", "investigation", "information", "mystery", "social", "info_source", "clue_source", "objective", "setting", "context")):
                 score += 2
             if any(x in role for x in ("combat", "climax")):
                 score -= 2
@@ -381,8 +551,8 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
                 score -= 6
             if any(x in header for x in ("ritual", "banishment", "exorcism", "purification")):
                 score -= 4
-            if any(x in role for x in ("information", "clue", "investigation", "social", "mystery hub", "setting")):
-                score += 3
+            if any(x in archetype for x in ("artifact", "signal", "document", "evidence", "warning", "briefing", "investigator", "captain", "control room", "ship", "vehicle", "guardian", "cult", "hazard")):
+                score += 1
 
             score += min(len(text) // 300, 3)
             rescored.append((score, doc))
@@ -399,35 +569,6 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
                 doc.page_content[:220]
             )
 
-        # top_docs = scen_docs[:3]
-        # remaining = scen_docs[3:]
-        # random.shuffle(remaining)
-        # mixed_docs = top_docs + remaining[:2]
-        # logger.info("[SCENARIO_DB] Mixed docs selected for synthesis: %d", len(mixed_docs))
-        # for i, doc in enumerate(mixed_docs, start=1):
-        #     logger.info(
-        #         "[SCENARIO_DB] mixed_%d meta=%s preview=%r",
-        #         i,
-        #         getattr(doc, "metadata", {}),
-        #         doc.page_content[:220]
-        #     )
-            
-        # anti_queries = [
-        #     "ancient ritual sacrifice temple priests",
-        #     "arctic expedition ice buried city",
-        #     "hospital patients memories identity",
-        #     "submarine deep ocean pressure hull breach",
-        #     "wartime bunker coded transmissions",
-        #     "suburban neighborhood wrong underneath",
-        # ]
-        # cross_query = random.choice(anti_queries)
-        # cross_docs = scen_db.similarity_search(cross_query, k=3)
-        # existing_contents = {d.page_content for d in mixed_docs}
-        # cross_pick = next((d for d in cross_docs if d.page_content not in existing_contents), None)
-        # if cross_pick:
-        #     mixed_docs.append(cross_pick)
-        # random.shuffle(mixed_docs)
-
         atoms = [f"ATOM {i+1}:\n{doc.page_content.strip()}" for i, doc in enumerate(mixed_docs)]
         raw_atoms_text = "\n\n".join(atoms)
         _dbg("RANDOM/CUSTOM RAW ATOMS", raw_atoms_text[:12000])
@@ -435,20 +576,78 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
 
         logger.info("Synthesizing unique scenario blueprint from atoms...")
         try:
-            synth_llm = get_llm(temperature=0.45)
+            synth_llm = get_llm(temperature=0.2)
             synth_chain = PromptTemplate.from_template(
                 read_prompt("scenario_gen.txt", prompt_dir=prompt_dir)
             ) | synth_llm
 
-            synth_raw = synth_chain.invoke({
+            synth_vars = {
                 "themes": themes_str,
                 "era_context": era_context,
                 "language": lang,
                 "language_name": get_language_name(lang),
                 "seed": query_text,
                 "atoms": raw_atoms_text,
-            })
-            blueprint = extract_json(synth_raw)
+            }
+
+            # A) first attempt
+            synth_raw = synth_chain.invoke(synth_vars)
+
+            try:
+                blueprint = extract_blueprint_json(synth_raw)
+
+            except Exception as parse_err:
+                logger.warning("Scenario blueprint parse failed: %s", parse_err)
+                _dbg("SCENARIO_SYNTH RAW FAILED", str(synth_raw)[:12000])
+                logger.warning("SCENARIO_SYNTH tail preview: %r", str(synth_raw)[-2000:])
+
+                # B1) repair broken JSON first
+                repair_llm = get_llm(temperature=0.1)
+                repair_prompt = (
+                    "Repair the following broken scenario blueprint JSON.\n"
+                    "Return ONLY one valid JSON object.\n"
+                    "Do not add commentary.\n"
+                    "Do not wrap in markdown.\n"
+                    "Preserve the scenario content unless a tiny change is required to restore valid JSON.\n\n"
+                    f"BROKEN JSON:\n{synth_raw}"
+                )
+                logger.warning("SCENARIO_SYNTH: starting repair invoke")
+                repaired_raw = repair_llm.invoke(repair_prompt)
+
+                try:
+                    blueprint = extract_blueprint_json(repaired_raw)
+                except Exception as repair_err:
+                    logger.warning("Scenario blueprint repair failed: %s", repair_err)
+                    _dbg("SCENARIO_SYNTH REPAIR RAW FAILED", str(repaired_raw)[:12000])
+                    logger.warning("SCENARIO_SYNTH REPAIR tail preview: %r", str(repaired_raw)[-2000:])
+                    raise RuntimeError(f"Blueprint repair failed after initial parse error: {repair_err}")
+                
+                # except Exception as repair_err:
+                #     logger.warning("Scenario blueprint repair failed: %s", repair_err)
+                #     _dbg("SCENARIO_SYNTH REPAIR RAW FAILED", str(repaired_raw)[:12000])
+                #     logger.warning("SCENARIO_SYNTH REPAIR tail preview: %r", str(repaired_raw)[-2000:])
+
+                #     # B2) only if repair failed -> regenerate from atoms once
+                #     logger.warning("Regenerating scenario blueprint from atoms (one retry)")
+                #     regen_llm = get_llm(temperature=0.15)
+                #     regen_chain = PromptTemplate.from_template(
+                #         read_prompt("scenario_gen.txt", prompt_dir=prompt_dir)
+                #     ) | regen_llm
+
+                #     regen_prompt_vars = dict(synth_vars)
+                #     regen_prompt_vars["atoms"] = (
+                #         raw_atoms_text
+                #         + "\n\nIMPORTANT:\n"
+                #         + "- Return only one valid JSON object.\n"
+                #         + "- Do not use markdown fences.\n"
+                #         + "- Ensure all objects and arrays are properly closed.\n"
+                #         + "- Do not leave trailing commas.\n"
+                #     )
+
+                #     logger.warning("SCENARIO_SYNTH: starting regenerate invoke")
+                #     regen_raw = regen_chain.invoke(regen_prompt_vars)
+                #     blueprint = extract_blueprint_json(regen_raw)
+
             logger.info(
                 "[SCENARIO_SYNTH] title=%r | hook=%r | core=%r | hidden=%r",
                 blueprint.get("title", ""),
@@ -456,17 +655,16 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
                 blueprint.get("core_mystery", ""),
                 blueprint.get("hidden_threat", ""),
             )
+
             scenario_atoms_text = (
                 f"SCENARIO TITLE: {blueprint.get('title', 'Unknown')}\n"
                 f"SETTING: {blueprint.get('era_and_setting', '')}\n"
                 f"HOOK: {blueprint.get('inciting_hook', '')}\n"
-                f"CORE MYSTERY: {blueprint.get('core_mystery', '')}\n"
                 f"KEY NPC: {blueprint.get('key_npc', '')}\n"
-                f"HIDDEN THREAT: {blueprint.get('hidden_threat', '')}\n"
-                f"PLOT TWISTS: {' | '.join(blueprint.get('plot_twists', []))}\n"
                 f"ATMOSPHERE: {blueprint.get('atmosphere_notes', '')}"
             )
             logger.info(f"Scenario blueprint synthesized: {blueprint.get('title', '?')}")
+
         except Exception as e:
             logger.warning(f"Scenario synthesis failed ({e}), falling back to raw atoms.")
             blueprint = {}
@@ -489,7 +687,8 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
             tags_str = ", ".join(tags_raw) if isinstance(tags_raw, list) else str(tags_raw or "")
             lid = db.upsert_location(
                 name=str(loc.get("name", "Unknown")),
-                description=str(loc.get("description", "")),
+                # description=str(loc.get("description", "")),
+                description="",
                 tags=tags_str
             )
             loc_id_map[loc.get("name", "")] = lid
@@ -613,8 +812,9 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
     print(f"==>> [SESSION START] language stored        : {repr(lang)}")
 
     # 4. Trigger opening narration
-    start_msg = "Start the story. Open with the first playable scene and describe the starting location."
-    return await handle_chat_logic(ChatRequest(message=start_msg, session_id=session_id))
+    # start_msg = "Start the story. Open with the first playable scene and describe the starting location."
+    # return await handle_chat_logic(ChatRequest(message=start_msg, session_id=session_id))
+    return await generate_opening_scene_logic(db, session_id=session_id)
 
 async def handle_chat_logic(req: ChatRequest) -> dict:
     if req.session_id not in active_dbs:
@@ -745,8 +945,57 @@ async def handle_chat_logic(req: ChatRequest) -> dict:
     logger.info("handle_chat_logic(): raw LLM response preview: %r", str(response_text)[:4000])
     result = extract_json(response_text)
 
+    if not looks_like_valid_keeper_response(str(response_text), result):
+        logger.warning("Non-contract LLM reply detected; attempting one repair regeneration")
+
+        repair_prompt = (
+            "Your previous reply violated the required Keeper output contract.\n"
+            "Return ONLY a valid <SYSTEM_RESPONSE_JSON>...</SYSTEM_RESPONSE_JSON> block.\n"
+            "Do not ask the user for clarification.\n"
+            "Do not explain your answer.\n"
+            "Do not output markdown.\n"
+            "Preserve the same current scene, current action, and current game state.\n"
+        )
+
+        repaired_text = chain.invoke({
+            "language": session_language,
+            "language_name": get_language_name(session_language),
+            "campaign_context": (
+                context_str
+                + "\n\n--- CURRENT GAME STATE ---\n"
+                + state_str
+                + "\n\n--- CURRENT COMBAT STATE ---\n"
+                + combat_state_text
+                + "\n\n"
+                + scene_loop_guard
+                + ("\n\n" + stall_guard if stall_guard else "")
+                + ("\n\n" + verdict_guard if verdict_guard else "")
+                + "\n\n--- CONTRACT REPAIR NOTICE ---\n"
+                + repair_prompt
+            ),
+            "era_context": setting_override + " " + era_override,
+            "history": get_chat_history(db, limit=15),
+            "action": req.message,
+            "last_turn_ban": extract_last_turn_ban(db),
+        })
+
+        logger.warning("Repair regeneration raw preview: %r", str(repaired_text)[:2000])
+        repaired_result = extract_json(repaired_text)
+
+        if looks_like_valid_keeper_response(str(repaired_text), repaired_result):
+            result = repaired_result
+
     if combat_turn:
         result = resolve_combat_turn(db, result)
+
+    violations = validate_llm_response_against_state(db, result)
+    if violations:
+        logger.warning("LLM response validation failed: %s", violations)
+        db.log_event("LLM_VALIDATION_FAIL", {
+            "violations": violations,
+            "narrative": result.get("narrative", "")[:500]
+        })
+        result = sanitize_llm_result_on_validation_failure(result, violations)
 
     rr = result.get("roll_request") or {}
     if rr.get("required"):
@@ -952,8 +1201,58 @@ async def stream_chat_logic(req: ChatRequest):
     logger.info("stream_chat_logic(): full streamed LLM response preview: %r", full_text[:4000])
 
     result = extract_json(full_text)
+
+    if not looks_like_valid_keeper_response(str(full_text), result):
+        logger.warning("Non-contract LLM reply detected; attempting one repair regeneration")
+
+        repair_prompt = (
+            "Your previous reply violated the required Keeper output contract.\n"
+            "Return ONLY a valid <SYSTEM_RESPONSE_JSON>...</SYSTEM_RESPONSE_JSON> block.\n"
+            "Do not ask the user for clarification.\n"
+            "Do not explain your answer.\n"
+            "Do not output markdown.\n"
+            "Preserve the same current scene, current action, and current game state.\n"
+        )
+
+        repaired_text = chain.invoke({
+            "language": session_language,
+            "language_name": get_language_name(session_language),
+            "campaign_context": (
+                context_str
+                + "\n\n--- CURRENT GAME STATE ---\n"
+                + state_str
+                + "\n\n--- CURRENT COMBAT STATE ---\n"
+                + combat_state_text
+                + "\n\n"
+                + scene_loop_guard
+                + ("\n\n" + stall_guard if stall_guard else "")
+                + ("\n\n" + verdict_guard if verdict_guard else "")
+                + "\n\n--- CONTRACT REPAIR NOTICE ---\n"
+                + repair_prompt
+            ),
+            "era_context": setting_override + " " + era_override,
+            "history": get_chat_history(db, limit=15),
+            "action": req.message,
+            "last_turn_ban": extract_last_turn_ban(db),
+        })
+
+        logger.warning("Repair regeneration raw preview: %r", str(repaired_text)[:2000])
+        repaired_result = extract_json(repaired_text)
+
+        if looks_like_valid_keeper_response(str(repaired_text), repaired_result):
+            result = repaired_result
+
     if combat_turn:
         result = resolve_combat_turn(db, result)
+
+    violations = validate_llm_response_against_state(db, result)
+    if violations:
+        logger.warning("LLM response validation failed: %s", violations)
+        db.log_event("LLM_VALIDATION_FAIL", {
+            "violations": violations,
+            "narrative": result.get("narrative", "")[:500]
+        })
+        result = sanitize_llm_result_on_validation_failure(result, violations)
 
     rr = result.get("roll_request") or {}
     if rr.get("required"):

@@ -122,25 +122,58 @@ async def list_scenarios():
         if not results["ids"]:
             return []
 
-        grouped: dict = defaultdict(lambda: {"chunks": [], "meta": {}})
+        grouped: dict = defaultdict(lambda: {"chunks": [], "metas": []})
         for doc, meta in zip(results["documents"], results["metadatas"]):
-            source = meta.get("source", "unknown")
-            grouped[source]["meta"] = meta
+            source = (meta or {}).get("source", "unknown")
             grouped[source]["chunks"].append(doc)
+            grouped[source]["metas"].append(meta or {})
+
+        def _pick_title(source: str, metas: list[dict]) -> str:
+            for key in ("display_name", "title_en", "title_original", "Header_2"):
+                for meta in metas:
+                    value = str((meta or {}).get(key, "") or "").strip()
+                    if value:
+                        return value
+            return os.path.basename(source).replace(".md", "").replace("_", " ")
+
+        def _pick_theme(metas: list[dict]) -> str:
+            for key in ("type", "archetype", "role"):
+                values = []
+                for meta in metas:
+                    value = str((meta or {}).get(key, "") or "").strip()
+                    if value:
+                        values.append(value)
+                if values:
+                    uniq = []
+                    seen = set()
+                    for v in values:
+                        low = v.lower()
+                        if low in seen:
+                            continue
+                        seen.add(low)
+                        uniq.append(v)
+                    return ", ".join(uniq[:3])
+            return ""
+
+        def _pick_lang(metas: list[dict]) -> str:
+            for meta in metas:
+                value = str((meta or {}).get("lang", "") or "").strip()
+                if value:
+                    return value
+            return ""
 
         scenarios = []
         for source, data in grouped.items():
-            meta = data["meta"]
-            raw_title = os.path.basename(source).replace(".md", "").replace("_", " ")
+            metas = data["metas"]
             scenarios.append({
                 "id": source,
-                "title": raw_title,
-                "theme": meta.get("archetype", ""),
-                "era": meta.get("lang", ""),
-                "content": "\n\n".join(data["chunks"]),  # full document
+                "title": _pick_title(source, metas),
+                "theme": _pick_theme(metas),
+                "era": _pick_lang(metas),
+                "content": "".join(data["chunks"]),
             })
 
-        scenarios.sort(key=lambda s: s["title"])
+        scenarios.sort(key=lambda s: s["title"].lower())
         return scenarios
 
     except Exception as e:
