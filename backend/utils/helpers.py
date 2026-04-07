@@ -26,6 +26,7 @@ logger = logging.getLogger("keeper_ai.helpers")
 LANGUAGE_NAMES = {
     "ua": "Ukrainian",
     "en": "English",
+    "hr": "Croatian",    
     "ru": "Russian",
     "pl": "Polish",
     "de": "German",
@@ -34,7 +35,6 @@ LANGUAGE_NAMES = {
     "it": "Italian",
     "zh": "Chinese",
     "ja": "Japanese",
-    "hr": "Croatian",
 }
 
 def normalize_language_code(lang: str | None) -> str:
@@ -44,15 +44,6 @@ def normalize_language_code(lang: str | None) -> str:
 def get_language_name(lang: str | None) -> str:
     code = normalize_language_code(lang)
     return LANGUAGE_NAMES.get(code, code)
-
-def build_translation_instruction(target_lang: str) -> str:
-    language_name = get_language_name(target_lang)
-    return (
-        f"Translate into {language_name}. "
-        "Preserve placeholders, JSON keys, and variable markers exactly. "
-        "Do NOT translate proper nouns unless natural usage requires inflection only. "
-        "Output only the translated text."
-    )
 
 def read_prompt(filename: str, *, prompt_dir: str | None = None) -> str:
     rel = Path(filename)
@@ -100,6 +91,51 @@ def build_stall_forcing_guard(db: SessionDB) -> str:
         "Do not suggest 'check again', 'observe further', 'try to understand more', or equivalent soft continuation."
     )
 
+def _translate_user_facing_text(text: str, language: str) -> str:
+    language = normalize_language_code(language)
+    if not text or language == "en":
+        return text
+
+    llm = get_llm(temperature=0.1)
+    target_language = get_language_name(language)
+
+    prompt = (
+        f"Translate the following game text into {target_language}.\n"
+        "Rules:\n"
+        "- Preserve names, identifiers, and formatting.\n"
+        "- Do not add commentary.\n"
+        "- Output only the translation.\n\n"
+        f"TEXT:\n{text}"
+    )
+    try:
+        translated = llm.invoke(prompt).strip()
+        return translated or text
+    except Exception:
+        return text
+    
+def localize_opening_result_fields(result: dict, language: str) -> dict:
+    language = normalize_language_code(language)
+    if language == "en":
+        return result
+
+    safe = dict(result or {})
+    safe["narrative"] = _translate_user_facing_text(safe.get("narrative", ""), language)
+
+    actions = safe.get("suggested_actions") or []
+    safe["suggested_actions"] = [
+        _translate_user_facing_text(str(a), language) for a in actions
+    ]
+
+    updates = dict(safe.get("state_updates") or {})
+    if updates.get("location_description"):
+        updates["location_description"] = _translate_user_facing_text(updates["location_description"], language)
+    if updates.get("clue_content"):
+        updates["clue_content"] = _translate_user_facing_text(updates["clue_content"], language)
+    if updates.get("thread_progress"):
+        updates["thread_progress"] = _translate_user_facing_text(updates["thread_progress"], language)
+    safe["state_updates"] = updates
+
+    return safe
 
 def _looks_like_direct_question(text: str) -> bool:
     t = (text or "").strip().lower()
@@ -237,8 +273,6 @@ def build_scene_loop_guard(db: SessionDB) -> str:
         + extra
     )
 
-def build_language_instruction(session_language: str) -> str:
-    return get_language_name(session_language)
 
 
 def is_roll_verdict_message(message: str) -> bool:
@@ -276,6 +310,73 @@ def infer_scene_stall_level(db: SessionDB) -> int:
         return 1
     return 0
 
+def _match_registry_items_by_names(items: list[dict], names: list[str], key: str = "name") -> list[dict]:
+    wanted = {_normalize_name(x) for x in (names or []) if str(x).strip()}
+    out = []
+    for item in items or []:
+        value = _normalize_name(str(item.get(key, "") or ""))
+        if value and value in wanted:
+            out.append(item)
+    return out
+
+def _compact_registry_slice_for_scene(blueprint: dict, current_scene_obj: dict) -> str:
+    if not isinstance(blueprint, dict):
+        return ""
+
+    lines = []
+
+    current_location = str(current_scene_obj.get("location", "") or "").strip()
+    current_npcs = [str(x) for x in (current_scene_obj.get("npc_present") or []) if x]
+    current_clues = [str(x) for x in (current_scene_obj.get("clues_available") or []) if x]
+
+    locations = blueprint.get("locations") or []
+    npcs = blueprint.get("npcs") or []
+    clues = blueprint.get("clues") or []
+    threads = blueprint.get("plot_threads") or []
+
+    matched_locations = _match_registry_items_by_names(locations, [current_location], key="name")
+    matched_npcs = _match_registry_items_by_names(npcs, current_npcs, key="name")
+    matched_clues = _match_registry_items_by_names(clues, current_clues, key="title")
+
+    if matched_locations:
+        lines.append("CURRENT LOCATION REGISTRY:")
+        for loc in matched_locations:
+            lines.append(
+                f"- {loc.get('name','')}"
+                f" | tags={loc.get('tags','')}"
+                f" | hidden={loc.get('hidden','')}"
+            )
+
+    if matched_npcs:
+        lines.append("CURRENT NPC REGISTRY:")
+        for npc in matched_npcs:
+            lines.append(
+                f"- {npc.get('name','')}"
+                f" | role={npc.get('role','')}"
+                f" | secret={npc.get('secret','')}"
+                f" | motivation={npc.get('motivation','')}"
+            )
+
+    if matched_clues:
+        lines.append("CURRENT CLUE REGISTRY:")
+        for clue in matched_clues:
+            lines.append(
+                f"- {clue.get('title','')}"
+                f" | content={clue.get('content','')}"
+                f" | true_meaning={clue.get('true_meaning','')}"
+                f" | location={clue.get('location','')}"
+            )
+
+    if threads:
+        lines.append("ACTIVE PLOT THREADS:")
+        for th in threads[:2]:
+            lines.append(
+                f"- {th.get('name','')}"
+                f" | stakes={th.get('stakes','')}"
+                f" | steps={th.get('steps','')}"
+            )
+
+    return "\n".join(lines)
 
 def assemble_keeper_prompt(
     *,
@@ -303,6 +404,68 @@ def assemble_keeper_prompt(
     )
     return "\n\n".join(part.strip() for part in parts if part and part.strip()) + "\n"
 
+def extract_blueprint_json(text: str) -> dict:
+    raw_text = (text or "").strip()
+    logger.info("extract_blueprint_json(): raw preview: %r", raw_text[:4000])
+
+    cleaned = raw_text
+
+    # Remove markdown fences
+    cleaned = re.sub(r"^```[a-zA-Z]*\n", "", cleaned)
+    cleaned = re.sub(r"\n```$", "", cleaned)
+
+    # Keep only the largest JSON-looking object
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("No complete JSON object found in blueprint response")
+
+    candidate = cleaned[start:end + 1]
+
+    # --- soft repair layer for common model artifacts ---
+    # remove obvious template junk
+    candidate = candidate.replace("<%", "")
+    candidate = candidate.replace("%>", "")
+
+    # normalize a few observed broken keys / artifacts
+    candidate = re.sub(
+        r'"dynamic_press[^"]*pressures"\s*:',
+        '"dynamic_pressures":',
+        candidate,
+        flags=re.IGNORECASE,
+    )
+    candidate = re.sub(
+        r'"exit_[a-zA-Z]+_condition"\s*:',
+        '"exit_condition":',
+        candidate,
+        flags=re.IGNORECASE,
+    )
+
+    # remove accidental control characters
+    candidate = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", candidate)
+
+    logger.info("extract_blueprint_json(): candidate preview: %r", candidate[:4000])
+
+    parsed = json.loads(candidate, strict=False)
+
+    if not isinstance(parsed, dict):
+        raise ValueError("Blueprint response is not a JSON object")
+
+    required = ["title", "era_and_setting", "inciting_hook", "acts"]
+    missing = [k for k in required if k not in parsed]
+    if missing:
+        raise ValueError(f"Blueprint missing required keys: {missing}")
+
+    if not isinstance(parsed.get("acts"), list) or not parsed["acts"]:
+        raise ValueError("Blueprint acts must be a non-empty list")
+
+    if not str(parsed.get("title", "")).strip():
+        raise ValueError("Blueprint title is empty")
+
+    if not str(parsed.get("inciting_hook", "")).strip():
+        raise ValueError("Blueprint inciting_hook is empty")
+
+    return parsed
 
 def extract_json(text: str) -> dict:
     raw_text = text or ""
@@ -725,17 +888,6 @@ def extract_last_turn_ban(db: SessionDB) -> str:
 # State string builder
 # ─────────────────────────────────────────────
 
-def build_state_str(pack: dict) -> str:
-    """Formats the prompt-state pack dict into a clean string block for the LLM."""
-    return (
-        f"INVESTIGATORS:\n{pack.get('investigators_text')}\n\n"
-        f"KNOWN NPCs:\n{pack.get('npcs_text')}\n\n"
-        f"CURRENT LOCATION:\n{pack.get('location_text')}\n\n"
-        f"PLOT THREADS:\n{pack.get('threads_text')}\n\n"
-        f"DISCOVERED CLUES:\n{pack.get('clues_text')}"
-    )
-
-
 def _safe_json_loads(value: str | None):
     if not value:
         return {}
@@ -760,51 +912,165 @@ def _filter_met_npcs(npcs_text: str, all_keeper_chat: str) -> str:
     return "\n".join(met_lines) if met_lines else "(none yet)"
 
 
-def compact_blueprint_text(blueprint: dict | None) -> str:
+def _normalize_name(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip().lower())
+
+
+def _get_current_scene_obj(blueprint: dict, current_act: str, current_scene: str) -> dict:
+    if not isinstance(blueprint, dict):
+        return {}
+
+    try:
+        act_num = int(current_act or 1)
+    except Exception:
+        act_num = 1
+
+    for act in blueprint.get("acts") or []:
+        if int(act.get("act", 0) or 0) != act_num:
+            continue
+        for scene in act.get("scenes") or []:
+            if _normalize_name(scene.get("scene", "")) == _normalize_name(current_scene):
+                return scene
+    return {}
+
+
+def _get_next_scene_obj(blueprint: dict, current_act: str, current_scene: str) -> dict:
+    if not isinstance(blueprint, dict):
+        return {}
+
+    try:
+        act_num = int(current_act or 1)
+    except Exception:
+        act_num = 1
+
+    acts = blueprint.get("acts") or []
+    for act_idx, act in enumerate(acts):
+        if int(act.get("act", 0) or 0) != act_num:
+            continue
+
+        scenes = act.get("scenes") or []
+        for i, scene in enumerate(scenes):
+            if _normalize_name(scene.get("scene", "")) == _normalize_name(current_scene):
+                if i + 1 < len(scenes):
+                    return scenes[i + 1]
+                if act_idx + 1 < len(acts):
+                    next_act_scenes = acts[act_idx + 1].get("scenes") or []
+                    return next_act_scenes[0] if next_act_scenes else {}
+    return {}
+
+
+def compact_blueprint_text(
+    blueprint: dict | None,
+    *,
+    current_act: str = "1",
+    current_scene: str = "",
+    met_npc_names: list[str] | None = None,
+    found_clue_titles: list[str] | None = None,
+) -> str:
+    """
+    Return ONLY the playable slice of the blueprint.
+    Do not expose hidden_threat, core_mystery, late acts, unseen NPC secrets, or hidden clues.
+    """
     if not isinstance(blueprint, dict) or not blueprint:
         return "(none)"
 
+    met_npc_names = {_normalize_name(x) for x in (met_npc_names or []) if x}
+    found_clue_titles = {_normalize_name(x) for x in (found_clue_titles or []) if x}
+
     lines = []
-    for key in ["title", "era_and_setting", "inciting_hook", "core_mystery", "hidden_threat", "atmosphere_notes"]:
+
+    # Public/top-level only
+    for key in ["title", "era_and_setting", "inciting_hook", "atmosphere_notes"]:
         value = blueprint.get(key)
         if value:
             lines.append(f"{key}: {value}")
 
-    acts = blueprint.get("acts") or []
-    if acts:
-        lines.append("acts:")
-        for act in acts[:6]:
-            act_no = act.get("act", "?")
-            act_title = act.get("title", "")
-            act_summary = act.get("summary", "")
-            lines.append(f"- act={act_no}; title={act_title}; summary={act_summary}")
-            for scene in (act.get("scenes") or [])[:4]:
-                scene_name = scene.get("scene", "")
-                location = scene.get("location", "")
-                trigger = scene.get("trigger", "")
-                what_happens = scene.get("what_happens", "")
-                threat_level = scene.get("threat_level", "")
-                lines.append(
-                    f"  - scene={scene_name}; location={location}; trigger={trigger}; "
-                    f"what_happens={what_happens}; threat_level={threat_level}"
-                )
+    current_scene_obj = _get_current_scene_obj(blueprint, current_act, current_scene)
+    next_scene_obj = _get_next_scene_obj(blueprint, current_act, current_scene)
 
-    for list_key in ["locations", "npcs", "clues", "plot_threads"]:
-        items = blueprint.get(list_key) or []
-        if not items:
-            continue
-        lines.append(f"{list_key}:")
-        for item in items[:6]:
-            if isinstance(item, dict):
-                parts = []
-                for field in ["name", "title", "role", "location", "stakes", "description", "content", "secret"]:
-                    val = item.get(field)
-                    if val:
-                        parts.append(f"{field}={val}")
-                if parts:
-                    lines.append("- " + "; ".join(parts[:4]))
-            else:
-                lines.append(f"- {item}")
+    lines.append("current_progression:")
+    lines.append(f"- current_act={current_act}")
+    lines.append(f"- current_scene={current_scene}")
+
+    if current_scene_obj:
+        lines.append("current_scene_frame:")
+        for field in [
+            "scene", "location", "scene_function", "dramatic_question",
+            "entry_condition", "exit_condition", "trigger",
+            "description", "what_happens", "pressure_if_delayed", "threat_level"
+        ]:
+            value = current_scene_obj.get(field)
+            if value:
+                lines.append(f"- {field}={value}")
+
+        visible_scene_npcs = current_scene_obj.get("npc_present") or []
+        if visible_scene_npcs:
+            lines.append("- scene_npcs=" + ", ".join(str(x) for x in visible_scene_npcs if x))
+
+        visible_scene_clues = current_scene_obj.get("clues_available") or []
+        if visible_scene_clues:
+            lines.append("- scene_clues=" + ", ".join(str(x) for x in visible_scene_clues if x))
+
+    if next_scene_obj:
+        lines.append("next_reachable_scene_hint:")
+        for field in ["scene", "location", "trigger", "threat_level"]:
+            value = next_scene_obj.get(field)
+            if value:
+                lines.append(f"- {field}={value}")
+
+    # Only met NPCs or NPCs explicitly present in current scene
+    current_scene_npcs = {
+        _normalize_name(x) for x in (current_scene_obj.get("npc_present") or []) if x
+    }
+    allowed_npcs = met_npc_names | current_scene_npcs
+    npcs = blueprint.get("npcs") or []
+    if allowed_npcs and npcs:
+        lines.append("allowed_npcs:")
+        for npc in npcs:
+            npc_name = str(npc.get("name", "") or "")
+            if _normalize_name(npc_name) not in allowed_npcs:
+                continue
+            parts = [f"name={npc_name}"]
+            if npc.get("description"):
+                parts.append(f"description={npc['description']}")
+            if npc.get("role"):
+                parts.append(f"role={npc['role']}")
+            lines.append("- " + "; ".join(parts))
+
+    # Only found clues + current scene clue titles, never full hidden clue set
+    clues = blueprint.get("clues") or []
+    current_scene_clue_titles = {
+        _normalize_name(x) for x in (current_scene_obj.get("clues_available") or []) if x
+    }
+    allowed_clues = found_clue_titles | current_scene_clue_titles
+    if clues and allowed_clues:
+        lines.append("allowed_clues:")
+        for clue in clues:
+            title = str(clue.get("title", "") or "")
+            if _normalize_name(title) not in allowed_clues:
+                continue
+            parts = [f"title={title}"]
+            if clue.get("location"):
+                parts.append(f"location={clue['location']}")
+            # content only for already-found clues
+            if _normalize_name(title) in found_clue_titles and clue.get("content"):
+                parts.append(f"content={clue['content']}")
+            lines.append("- " + "; ".join(parts))
+
+    # Threads are okay to expose in summary form
+    threads = blueprint.get("plot_threads") or []
+    if threads:
+        lines.append("plot_threads:")
+        for item in threads[:6]:
+            if not isinstance(item, dict):
+                continue
+            parts = []
+            for field in ["name", "stakes"]:
+                val = item.get(field)
+                if val:
+                    parts.append(f"{field}={val}")
+            if parts:
+                lines.append("- " + "; ".join(parts))
 
     return "\n".join(lines) if lines else "(none)"
 
@@ -841,28 +1107,32 @@ def build_authoritative_context(db: SessionDB, *, campaign_atoms: str = "", them
             "------------------------------------------"
         )
 
+    pack = db.build_prompt_state_pack(limit_events=12)
+    all_keeper_chat = " ".join(
+        e.get("payload", {}).get("content", "")
+        for e in db.list_events(limit=80)
+        if e.get("event_type") == "CHAT" and e.get("payload", {}).get("role") == "Keeper"
+    )
+    met_npcs = _filter_met_npcs(pack.get("npcs_text", ""), all_keeper_chat)
+
+    met_npc_names = []
+    for line in met_npcs.splitlines():
+        clean = line.strip().lstrip("-").strip()
+        if not clean:
+            continue
+        met_npc_names.append(clean.split("—", 1)[0].strip())
+
+    found_clue_titles = [c.get("title", "") for c in db.list_clues(status="found", limit=100)]
+
     if blueprint:
         context_parts.append(
             "--- AUTHORITATIVE SCENARIO BLUEPRINT ---\n"
-            "This structured scenario state is more authoritative than your genre priors.\n"
+            "This is the playable, current slice of the scenario blueprint.\n"
+            "It is more authoritative than your genre priors.\n"
             "Do not invent unrelated threats, locations, factions, or act transitions.\n"
-            f"{compact_blueprint_text(blueprint)}\n"
+            f"{compact_blueprint_text(blueprint, current_act=current_act, current_scene=current_scene, met_npc_names=met_npc_names, found_clue_titles=found_clue_titles)}\n"
             "----------------------------------------"
         )
-
-        current_act_num = int(current_act or 1)
-        hidden_threat = str(blueprint.get("hidden_threat", "") or "").strip()
-        core_mystery = str(blueprint.get("core_mystery", "") or "").strip()
-
-        if current_act_num <= 1:
-            context_parts.append(
-                "--- DISCLOSURE GATE ---\n"
-                f"Do not fully reveal hidden_threat ({hidden_threat}) in Act 1.\n"
-                f"Do not fully explain core_mystery ({core_mystery}) in Act 1.\n"
-                "In Act 1, provide signs, rumors, traces, witnesses, and partial contradictions only.\n"
-                "Named endgame entities, final mechanism logic, and full ritual purpose should emerge later unless directly forced by extraordinary player success.\n"
-                "----------------------"
-            )
 
     context_parts.append(
         "--- CURRENT ACT GATE ---\n"
@@ -889,14 +1159,6 @@ def build_authoritative_context(db: SessionDB, *, campaign_atoms: str = "", them
             "-------------------------"
         )
 
-    pack = db.build_prompt_state_pack(limit_events=12)
-    all_keeper_chat = " ".join(
-        e.get("payload", {}).get("content", "")
-        for e in db.list_events(limit=80)
-        if e.get("event_type") == "CHAT" and e.get("payload", {}).get("role") == "Keeper"
-    )
-    met_npcs = _filter_met_npcs(pack.get("npcs_text", ""), all_keeper_chat)
-
     state_str = (
         "=== AUTHORITATIVE GAME STATE ===\n"
         "The following is the current source-of-truth state from the session database.\n"
@@ -918,6 +1180,403 @@ def build_authoritative_context(db: SessionDB, *, campaign_atoms: str = "", them
 # Scene image prompt builder
 # ─────────────────────────────────────────────
 
+def _current_state_snapshot_for_validation(db: SessionDB) -> dict:
+    cur = db.conn.cursor()
+    blueprint = _safe_json_loads(kv_get(cur, "scenario_blueprint_json", "{}"))
+    current_act = kv_get(cur, "current_act", "1")
+    current_scene = kv_get(cur, "current_scene", "")
+    current_scene_location = kv_get(cur, "current_scene_location", "")
+
+    found_clues = db.list_clues(status="found", limit=200)
+    hidden_clues = db.list_clues(status="hidden", limit=200)
+
+    all_keeper_chat = " ".join(
+        e.get("payload", {}).get("content", "")
+        for e in db.list_events(limit=120)
+        if e.get("event_type") == "CHAT" and e.get("payload", {}).get("role") == "Keeper"
+    )
+
+    pack = db.build_prompt_state_pack(limit_events=12)
+    met_npcs_blob = _filter_met_npcs(pack.get("npcs_text", ""), all_keeper_chat)
+
+    met_npc_names = []
+    for line in met_npcs_blob.splitlines():
+        clean = line.strip().lstrip("-").strip()
+        if not clean:
+            continue
+        met_npc_names.append(clean.split("—", 1)[0].strip())
+
+    current_scene_obj = _get_current_scene_obj(blueprint, current_act, current_scene)
+
+    return {
+        "blueprint": blueprint,
+        "current_act": current_act,
+        "current_scene": current_scene,
+        "current_scene_location": current_scene_location,
+        "current_scene_obj": current_scene_obj,
+        "met_npc_names": met_npc_names,
+        "found_clue_titles": [c.get("title", "") for c in found_clues],
+        "hidden_clue_titles": [c.get("title", "") for c in hidden_clues],
+    }
+
+
+def validate_llm_response_against_state(db: SessionDB, result: dict) -> list[str]:
+    snap = _current_state_snapshot_for_validation(db)
+    narrative = (result.get("narrative") or "")
+    updates = result.get("state_updates") or {}
+    suggested_actions = result.get("suggested_actions") or []
+    suggestions_blob = "\n".join(str(x) for x in suggested_actions if x)
+    blueprint = snap["blueprint"]
+    current_scene_obj = snap["current_scene_obj"] or {}
+    current_scene_clues = {
+        _normalize_name(x) for x in (current_scene_obj.get("clues_available") or []) if x
+    }
+
+    violations = []
+
+    # 1) Unintroduced NPC by name
+    blueprint_npcs = blueprint.get("npcs") or []
+    allowed_npcs = {_normalize_name(x) for x in snap["met_npc_names"]}
+    allowed_npcs |= {_normalize_name(x) for x in (current_scene_obj.get("npc_present") or []) if x}
+
+    for npc in blueprint_npcs:
+        npc_name = str(npc.get("name", "") or "").strip()
+        if not npc_name:
+            continue
+        if _normalize_name(npc_name) in allowed_npcs:
+            continue
+        if npc_name.lower() in narrative.lower():
+            violations.append(f"unintroduced_npc:{npc_name}")
+
+    # 2) Hidden clue mentioned as already known
+    for clue_title in snap["hidden_clue_titles"]:
+        norm_title = _normalize_name(clue_title)
+        if not clue_title:
+            continue
+
+        # If this clue is explicitly available in the current scene,
+        # mentioning it as an object/lead is allowed.
+        if norm_title in current_scene_clues:
+            continue
+
+        if clue_title.lower() in narrative.lower():
+            if norm_title != _normalize_name(str(updates.get("clue_found", "") or "")):
+                violations.append(f"undiscovered_clue_revealed:{clue_title}")
+
+    # 3) Later-act location jump
+    try:
+        current_act_num = int(snap["current_act"] or 1)
+    except Exception:
+        current_act_num = 1
+
+    for act in blueprint.get("acts") or []:
+        try:
+            act_num = int(act.get("act", 0) or 0)
+        except Exception:
+            act_num = 0
+        if act_num <= current_act_num:
+            continue
+        for scene in act.get("scenes") or []:
+            loc = str(scene.get("location", "") or "").strip()
+            if loc and (loc.lower() in narrative.lower() or loc.lower() in suggestions_blob.lower()):
+                violations.append(f"later_act_location:{loc}")
+
+    # 4) Location update to place not reachable from current slice
+    next_scene_obj = _get_next_scene_obj(blueprint, snap["current_act"], snap["current_scene"])
+    allowed_locations = {
+        _normalize_name(snap["current_scene_location"]),
+        _normalize_name(current_scene_obj.get("location", "")),
+        _normalize_name(next_scene_obj.get("location", "")),
+    }
+    new_location = str(updates.get("location_name", "") or "").strip()
+    if new_location and _normalize_name(new_location) not in allowed_locations:
+        violations.append(f"unearned_location_jump:{new_location}")
+
+    return violations
+
+def looks_like_valid_keeper_response(raw_text: str, parsed: dict | None) -> bool:
+    text = (raw_text or "").strip()
+
+    if not isinstance(parsed, dict):
+        return False
+
+    required_keys = {"narrative", "suggested_actions", "roll_request"}
+    if not required_keys.issubset(parsed.keys()):
+        return False
+
+    if "<SYSTEM_RESPONSE_JSON>" in text and "</SYSTEM_RESPONSE_JSON>" in text:
+        return True
+
+    return True
+
+def validate_opening_scene_response(db: SessionDB, result: dict) -> list[str]:
+    """
+    Lighter validation for the very first playable scene.
+    We allow entering the first scene location and introducing NPCs/clues that
+    belong to that scene, but still block later-act jumps and premature truth reveals.
+    """
+    snap = _current_state_snapshot_for_validation(db)
+    blueprint = snap["blueprint"]
+    current_scene_obj = snap["current_scene_obj"] or {}
+
+    narrative = (result.get("narrative") or "")
+    updates = result.get("state_updates") or {}
+    suggested_actions = result.get("suggested_actions") or []
+    suggestions_blob = "\n".join(str(x) for x in suggested_actions if x)
+
+    violations = []
+
+    if not narrative.strip():
+        violations.append("opening_missing_narrative")
+
+    if not isinstance(suggested_actions, list) or len([x for x in suggested_actions if str(x).strip()]) < 2:
+        violations.append("opening_missing_actions")
+
+    if str(updates.get("thread_progress", "") or "").strip():
+        violations.append("opening_thread_progress_too_early")
+
+    # Allow ONLY the current scene location (or empty)
+    start_location = _normalize_name(current_scene_obj.get("location", "") or snap["current_scene_location"])
+    new_location = _normalize_name(str(updates.get("location_name", "") or ""))
+    if new_location and start_location and new_location != start_location:
+        violations.append(f"opening_wrong_location:{updates.get('location_name', '')}")
+
+    # Do not reveal hidden truth / core mystery directly in opening
+    hidden_threat = str(blueprint.get("hidden_threat", "") or "").strip()
+    core_mystery = str(blueprint.get("core_mystery", "") or "").strip()
+    never_suspect = str(blueprint.get("truth_the_players_never_suspect", "") or "").strip()
+
+    lowered = (narrative + "\n" + suggestions_blob).lower()
+    for forbidden, tag in (
+        (hidden_threat, "opening_hidden_threat"),
+        (core_mystery, "opening_core_mystery"),
+        (never_suspect, "opening_final_truth"),
+    ):
+        if forbidden and forbidden.lower() in lowered:
+            violations.append(tag)
+
+    # Do not jump to later-act locations
+    try:
+        current_act_num = int(snap["current_act"] or 1)
+    except Exception:
+        current_act_num = 1
+
+    for act in blueprint.get("acts") or []:
+        try:
+            act_num = int(act.get("act", 0) or 0)
+        except Exception:
+            act_num = 0
+        if act_num <= current_act_num:
+            continue
+        for scene in act.get("scenes") or []:
+            loc = str(scene.get("location", "") or "").strip()
+            if loc and loc.lower() in lowered:
+                violations.append(f"opening_later_act_location:{loc}")
+
+    return violations
+
+def build_opening_fallback_result(db: SessionDB) -> dict:
+    """
+    Deterministic fallback opening if the LLM opening fails.
+    """
+    cur = db.conn.cursor()
+    blueprint = _safe_json_loads(kv_get(cur, "scenario_blueprint_json", "{}"))
+    current_act = kv_get(cur, "current_act", "1")
+    current_scene = kv_get(cur, "current_scene", "")
+    current_scene_location = kv_get(cur, "current_scene_location", "")
+    current_objective = kv_get(cur, "current_objective", "")
+
+    scene_obj = _get_current_scene_obj(blueprint, current_act, current_scene)
+
+    scene_name = str(scene_obj.get("scene", "") or current_scene)
+    location = str(scene_obj.get("location", "") or current_scene_location or "the current scene")
+    description = str(scene_obj.get("description", "") or "")
+    what_happens = str(scene_obj.get("what_happens", "") or "")
+    npcs = [str(x) for x in (scene_obj.get("npc_present") or []) if x]
+    clues = [str(x) for x in (scene_obj.get("clues_available") or []) if x]
+
+    narrative_parts = []
+    narrative_parts.append(f"You arrive at {location}.")
+    if description:
+        narrative_parts.append(description)
+    if what_happens:
+        narrative_parts.append(what_happens)
+    elif scene_name:
+        narrative_parts.append(f"This is the opening scene: {scene_name}.")
+    if current_objective:
+        narrative_parts.append(f"Right now, your immediate objective is: {current_objective}")
+
+    suggested_actions = []
+    if npcs:
+        suggested_actions.append(f"Talk to {npcs[0]}")
+    if clues:
+        suggested_actions.append(f"Examine {clues[0]}")
+    suggested_actions.append(f"Survey {location} for anything immediately out of place")
+
+    # keep exactly 3
+    suggested_actions = suggested_actions[:3]
+    while len(suggested_actions) < 3:
+        suggested_actions.append("Press the most obvious lead in front of you")
+
+    return {
+        "narrative": " ".join(x.strip() for x in narrative_parts if x.strip()),
+        "suggested_actions": suggested_actions,
+        "state_updates": {
+            "character_name": "",
+            "hp_change": 0,
+            "sanity_change": 0,
+            "mp_change": 0,
+            "inventory_add": "",
+            "inventory_remove": "",
+            "location_name": location,
+            "location_description": description,
+            "clue_found": "",
+            "clue_content": "",
+            "thread_progress": ""
+        },
+        "combat_update": {
+            "combat_started": False,
+            "combat_ended": False,
+            "attacker_name": "",
+            "target_name": "",
+            "attack_mode": "",
+            "weapon_name": "",
+            "weapon_damage": "",
+            "skill_name": "",
+            "defender_option": "",
+            "shots_fired": 0,
+            "bonus_dice": 0,
+            "penalty_dice": 0
+        },
+        "roll_request": {
+            "required": False,
+            "skill_name": "",
+            "action_text": "",
+            "reason": ""
+        }
+    }
+
+def sanitize_llm_result_on_validation_failure(result: dict, violations: list[str]) -> dict:
+    """
+    Conservative server-side sanitization.
+    Do not replace the whole response unless absolutely necessary.
+    """
+    safe = dict(result or {})
+    safe.setdefault("narrative", "")
+    safe.setdefault("suggested_actions", [])
+    safe.setdefault("state_updates", {})
+    safe.setdefault("roll_request", {"required": False, "skill_name": "", "action_text": "", "reason": ""})
+
+    updates = dict(safe.get("state_updates") or {})
+
+    # Hard violations that require stripping state changes
+    hard_prefixes = (
+        "unintroduced_npc:",
+        "later_act_location:",
+        "unearned_location_jump:",
+    )
+
+    # Soft violations: keep narrative, just prevent premature state mutation
+    soft_prefixes = (
+        "undiscovered_clue_revealed:",
+    )
+
+    has_hard = any(v.startswith(hard_prefixes) for v in violations)
+    has_soft = any(v.startswith(soft_prefixes) for v in violations)
+
+    if has_soft:
+        updates["clue_found"] = ""
+        updates["clue_content"] = ""
+        safe["state_updates"] = updates
+
+    if has_hard:
+        updates["location_name"] = ""
+        updates["location_description"] = ""
+        updates["clue_found"] = ""
+        updates["clue_content"] = ""
+        updates["thread_progress"] = ""
+        safe["state_updates"] = updates
+
+        # Keep the model's narrative if possible, but strip forced roll gate
+        safe["roll_request"] = {"required": False, "skill_name": "", "action_text": "", "reason": ""}
+
+        # If there is no usable narrative left, use an English system-safe fallback
+        if not (safe.get("narrative") or "").strip():
+            safe["narrative"] = (
+                "The situation remains tense, but no new confirmed breakthrough occurs yet. "
+                "Press the current scene using only details already established on-screen."
+            )
+
+        if not safe.get("suggested_actions"):
+            safe["suggested_actions"] = [
+                "Examine a detail already present in the current scene",
+                "Ask a direct question to someone already on-screen",
+                "Test an already-established lead"
+            ]
+
+    return safe
+
+def advance_blueprint_progress(db: SessionDB, result: dict) -> None:
+    cur = db.conn.cursor()
+    blueprint = _safe_json_loads(kv_get(cur, "scenario_blueprint_json", "{}"))
+    if not isinstance(blueprint, dict) or not blueprint:
+        return
+
+    current_act = kv_get(cur, "current_act", "1")
+    current_scene = kv_get(cur, "current_scene", "")
+    current_scene_obj = _get_current_scene_obj(blueprint, current_act, current_scene)
+    if not current_scene_obj:
+        return
+
+    updates = result.get("state_updates") or {}
+    clue_found = str(updates.get("clue_found", "") or "").strip()
+    location_name = str(updates.get("location_name", "") or "").strip()
+
+    scene_clues = {_normalize_name(x) for x in (current_scene_obj.get("clues_available") or []) if x}
+    scene_location = _normalize_name(current_scene_obj.get("location", ""))
+
+    payoff_hit = False
+
+    if clue_found and _normalize_name(clue_found) in scene_clues:
+        payoff_hit = True
+
+    if location_name and _normalize_name(location_name) != scene_location:
+        payoff_hit = True
+
+    if not payoff_hit:
+        return
+
+    acts = blueprint.get("acts") or []
+    try:
+        current_act_num = int(current_act or 1)
+    except Exception:
+        current_act_num = 1
+
+    for act_idx, act in enumerate(acts):
+        if int(act.get("act", 0) or 0) != current_act_num:
+            continue
+        scenes = act.get("scenes") or []
+        for scene_idx, scene in enumerate(scenes):
+            if _normalize_name(scene.get("scene", "")) != _normalize_name(current_scene):
+                continue
+
+            # next scene in same act
+            if scene_idx + 1 < len(scenes):
+                next_scene = scenes[scene_idx + 1]
+                kv_set(db, "current_scene", str(next_scene.get("scene", "") or ""))
+                kv_set(db, "current_scene_location", str(next_scene.get("location", "") or ""))
+                return
+
+            # first scene of next act
+            if act_idx + 1 < len(acts):
+                next_act = acts[act_idx + 1]
+                next_scenes = next_act.get("scenes") or []
+                kv_set(db, "current_act", str(next_act.get("act", current_act_num + 1)))
+                if next_scenes:
+                    kv_set(db, "current_scene", str(next_scenes[0].get("scene", "") or ""))
+                    kv_set(db, "current_scene_location", str(next_scenes[0].get("location", "") or ""))
+                return
+            
 def build_scene_prompt(
     narrative: str,
     era: str = "",
@@ -1239,3 +1898,6 @@ def apply_state_updates(db: SessionDB, result: dict) -> None:
             ("current_objective", new_objective),
         )
         db.conn.commit()
+
+    # --- Blueprint progression ---
+    advance_blueprint_progress(db, result)

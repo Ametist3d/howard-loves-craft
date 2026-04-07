@@ -125,7 +125,7 @@ export const SetupScreen: React.FC<Props> = ({ onStart, isLoading }) => {
       <div className="absolute top-4 right-4 flex gap-2 z-50">
         <div className="flex bg-black/60 rounded-lg p-1 backdrop-blur-md border border-gray-700">
           <button onClick={() => setLlmProvider('ollama')} className={`px-3 py-1 text-xs font-bold rounded-md ${llmProvider === 'ollama' ? 'bg-indigo-700 text-white' : 'text-gray-400'}`}>LOCAL</button>
-          <button onClick={() => setLlmProvider('openai')} className={`px-3 py-1 text-xs font-bold rounded-md ${llmProvider === 'openai' ? 'bg-green-800 text-white' : 'text-gray-400'}`}>GPT-4o</button>
+          <button onClick={() => setLlmProvider('openai')} className={`px-3 py-1 text-xs font-bold rounded-md ${llmProvider === 'openai' ? 'bg-green-800 text-white' : 'text-gray-400'}`}>GPT</button>
         </div>
         <select
           value={language}

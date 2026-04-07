@@ -54,15 +54,18 @@ Rules:
 - Integers only.
 - Never use dice notation inside state_updates numeric values.
 - weapon_damage may use dice notation like 1D3, 1D4, 1D6, 1D8, 1D10, 2D6+4, 4D6.
-- If the narrative introduces a new distinct place, fill location_name.
-- If the narrative reveals a concrete fact or evidence, fill clue_found and clue_content.
+- If the narrative introduces a new distinct place that the investigators actually enter or clearly arrive in, fill location_name.
+- If the narrative reveals a concrete, player-usable fact or evidence, fill clue_found and clue_content.
 - If the narrative clearly advances an existing investigation line, fill thread_progress.
-- Leave fields empty only when nothing actually changed in state.
+- Leave fields empty when nothing actually changed in state.
 
 STATE UPDATE ENFORCEMENT
-- If the response reveals a concrete clue, names a new destination, identifies the source of the lead, or changes the current objective, you MUST fill state_updates accordingly.
-- Do not leave state_updates empty when a clue has been materially discovered.
-- If investigators learn where to go next, set clue_found and/or thread_progress and update the objective implicitly through state.
+- Use state_updates only for established changes, not for mere possibilities.
+- Do not set clue_found merely because an object, journal, letter, diary, mirror, artifact, or lead is visible, named, suggested, or available to inspect.
+- Set clue_found when the investigators actually learn, confirm, decode, or otherwise gain meaningful content from that source.
+- Do not set location_name merely because a place is mentioned, proposed, glimpsed, or discussed.
+- Set location_name when the investigators materially enter, reach, or clearly arrive at that place.
+- If the response identifies the source of a lead, confirms a fact, or changes the active objective in a player-usable way, reflect that in state_updates.
 
 COMBAT PAYLOAD RULES:
 - Use combat_update only when violence, attack, armed threat, or an active combat exchange is occurring.

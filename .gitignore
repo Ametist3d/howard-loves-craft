@@ -1,10 +1,12 @@
 _bckp/
 .venv/
+.venv_paddle/
 __pycache__/
 node_modules/
 sessions/
 ~/.cache/huggingface/
 .cache/
+data_forge/
 
 # Python
 *.pyc
