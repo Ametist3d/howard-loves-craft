@@ -78,13 +78,37 @@ SCENARIO BACKBONE RULE
 - Then express that backbone through the acts/scenes JSON below.
 - The final JSON must include the scenario_engine object.
 
+REGISTRY RULES
+- acts.scenes are the primary scenario structure.
+- locations, npcs, clues, and plot_threads are compact canonical registries.
+- Keep registries short and non-redundant.
+- Do NOT repeat full scene prose inside registries.
+- Prefer one short sentence or compact fragment per field.
+- Keep only information that is not already obvious from the scene text.
+- Do NOT add extra sections beyond the schema below.
+
+REGISTRY FIELD RULES
+- locations:
+  - each item must contain only: name, tags, hidden
+  - keep tags compact
+  - hidden should be the one most important concealed fact about the place
+- npcs:
+  - each item must contain only: name, role, secret, motivation
+  - role must be one of: ally|neutral|enemy|hidden_enemy
+- clues:
+  - each item must contain only: title, content, true_meaning, location
+  - content = surface meaning
+  - true_meaning = deeper meaning
+- plot_threads:
+  - each item must contain only: name, stakes, steps
+  - keep steps as a small integer, usually 3-5
+
 VALIDITY REQUIREMENTS
 Your output is invalid unless all of the following are true:
 - exactly 4 acts are present
 - total scene count is between 8 and 12
 - Acts 1-3 each contain at least 2 scenes
 - at least 6 clues are present
-- at least 2 twists are present
 - at least 2 plot threads are present
 - the climax offers more than one possible resolution, cost, or tradeoff
 - the investigation includes at least one false lead and at least one contradiction
@@ -93,6 +117,12 @@ If any of these conditions are missing, revise the scenario before outputting th
 SEED PRIORITY RULE
 - The scenario seed is the primary source of truth for the hook, social setup, and central anomaly.
 - Atoms may enrich, sharpen, or escalate the seed, but must not replace it.
+
+LENGTH DISCIPLINE
+- Keep prose concise.
+- Do not overwrite compact registries with long descriptions.
+- Put most of the narrative richness into acts and scenes, not into registries.
+- Avoid repetition between scene descriptions, clue text, and registry entries.
 
 OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
 {{
@@ -316,61 +346,33 @@ OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
     }}
   ],
   "locations": [
-    {{"name": "Location name", "description": "1-2 sentence description", "tags": "entry|danger|clue|lair", "first_impressions": "What investigators notice immediately", "hidden": "What is concealed here that requires investigation to find"}}
+    {{
+      "name": "Location name",
+      "tags": "entry|danger|clue|lair",
+      "hidden": "The single most important concealed fact about this place"
+    }}
   ],
   "npcs": [
     {{
       "name": "Name",
       "role": "ally|neutral|enemy|hidden_enemy",
-      "description": "Who they appear to be (1 sentence)",
-      "secret": "What they truly are or hide (1 sentence)",
-      "motivation": "What they want and why (1 sentence)",
-      "when_encountered": "Which act/scene they appear in",
-      "behavior_if_pressured": "How they react under interrogation or threat (1 sentence)",
-      "apparent_loyalty": "Who they seem aligned with at first",
-      "actual_loyalty": "Who or what they really serve, if different"
+      "secret": "What they truly are or hide",
+      "motivation": "What they want and why"
     }}
   ],
   "clues": [
     {{
       "title": "Clue name",
-      "content": "What investigators find and its surface meaning (1 sentence)",
-      "true_meaning": "What it actually implies — the deeper truth (1 sentence)",
-      "location": "Location name where found",
-      "leads_to": "Scene or location this clue points toward",
-      "skill_to_find": "Skill name required, or 'none' if visible",
-      "appears_to_prove": "What wrong theory this clue may seem to support at first"
-    }}
-  ],
-  "clue_chain": [
-    "Clue title 1 → Clue title 2 → Revelation title → Core mystery revealed"
-  ],
-  "twists": [
-    {{
-      "name": "Twist name",
-      "timing": "act_1|act_2|act_3|climax",
-      "description": "What is revealed and how it changes the situation (2 sentences)",
-      "investigator_impact": "How this should affect the players emotionally or strategically"
-    }}
-  ],
-  "sanity_moments": [
-    {{
-      "trigger": "What investigators witness or learn",
-      "san_loss": "1d3|1d6|1d8|1d10",
-      "description": "The specific horror that causes the loss (1 sentence)"
+      "content": "What investigators find and its surface meaning",
+      "true_meaning": "What it actually implies",
+      "location": "Location name where found"
     }}
   ],
   "plot_threads": [
     {{
       "name": "Thread name",
-      "stakes": "What happens if investigators fail or ignore this thread (1 sentence)",
-      "steps": 4,
-      "failure_consequence": "Concrete in-world consequence of failure (1 sentence)"
+      "stakes": "What happens if investigators fail or ignore this thread",
+      "steps": 4
     }}
-  ],
-  "endings": {{
-    "success": "What the world looks like if investigators succeed (2 sentences)",
-    "partial": "What happens if they stop the immediate threat but miss the deeper truth (1 sentence)",
-    "failure": "What unfolds if investigators fail or die (2 sentences)"
-  }}
+  ]
 }}
