@@ -25,7 +25,7 @@ from utils.engine import (
     _image_results,
     stream_chat_logic,
 )
-from utils.helpers import generate_avatar_logic
+from utils.helper_story import generate_avatar_logic
 
 # ─── Config from .env ────────────────────────────────────────────────────────
 BE_HOST = os.getenv("BE_HOST", "0.0.0.0")

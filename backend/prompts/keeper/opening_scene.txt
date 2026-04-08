@@ -5,3 +5,9 @@ Anchor the opening in a concrete objective, hook, or immediate reason to act.
 Give investigators one clear thing to notice and one clear thing they can do next.
 If CURRENT OBJECTIVE exists in campaign_context, use it to shape the opening.
 Do not skip directly to a later act or climax space unless the scenario context explicitly starts there.
+
+OPENING STATE RULES
+- Do not set thread_progress in the opening scene unless a concrete investigation milestone is already completed.
+- Do not set clue_found merely because an anomaly, report, device, or record is visible or discussed.
+- In the opening, it is usually enough to establish the location, the immediate hook, and one actionable lead.
+- Let investigators ask, inspect, test, or verify before promoting information into clue_found or thread_progress.

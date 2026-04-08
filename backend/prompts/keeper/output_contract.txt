@@ -59,6 +59,19 @@ Rules:
 - If the narrative clearly advances an existing investigation line, fill thread_progress.
 - Leave fields empty when nothing actually changed in state.
 
+THREAD_PROGRESS FORMAT RULE
+- thread_progress must be a short factual phrase describing what investigation line advanced.
+- Do not express thread_progress as numeric fractions such as 1/4, 2/4, 3/4, etc.
+- Do not use thread_progress as a scoreboard, tracker bar, or progress meter.
+- Good examples:
+  - "The anomalous isotope report is confirmed as genuine."
+  - "The generator maintenance log becomes the new lead."
+  - "The missing scientist is linked to the sealed sub-ice tunnel."
+- Bad examples:
+  - "Investigation progress 1/4"
+  - "Anomaly thread: 2/4"
+  - "Main mystery 50% complete"
+  
 STATE UPDATE ENFORCEMENT
 - Use state_updates only for established changes, not for mere possibilities.
 - Do not set clue_found merely because an object, journal, letter, diary, mirror, artifact, or lead is visible, named, suggested, or available to inspect.
