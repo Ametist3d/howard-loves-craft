@@ -1,0 +1,102 @@
+RESOLUTION TYPE PLANNER
+
+Choose 2-4 possible resolution types for the climax. At least 2 must be viable. Each must carry a real cost, tradeoff, compromise, or future consequence. Do not make one obviously correct solution unless the seed explicitly demands tragedy.
+
+Allowed resolution_type values:
+- suppress
+- expose
+- contain
+- bargain
+- evacuate
+- misdirect
+- sever
+- sacrifice
+- transfer_cost
+- delay
+- destroy_with_cost
+- human_authority_solution
+- occult_or_technical_override
+- escape_and_bury
+
+Resolution definitions:
+
+suppress
+- Stop the immediate process, signal, ritual, transmission, exchange, or manifestation.
+- Cost should affect safety, reputation, evidence, innocents, or future risk.
+
+expose
+- Reveal the truth publicly or to authority.
+- Cost should be panic, disbelief, scapegoating, legal danger, loss of secrecy, or collapse of trust.
+
+contain
+- Keep the problem isolated without solving its deeper cause.
+- Cost should be maintenance burden, secrecy, collateral damage, or future recurrence.
+
+bargain
+- Negotiate with the force, faction, or agency behind the problem.
+- Cost should be moral compromise, future debt, hidden concession, or release of something unsafe.
+
+evacuate
+- Save lives by abandoning property, evidence, reputation, territory, or strategic advantage.
+- Cost should be unresolved threat or loss of truth.
+
+misdirect
+- Feed false information, false navigation, false timing, false identity, or false target to redirect danger.
+- Cost should be collateral harm, confusion, or loss of control.
+
+sever
+- Break the connection between two systems, groups, spaces, or signals.
+- Cost should be damage to ordinary human functions, isolation, or irreversible loss.
+
+sacrifice
+- Someone, something, access, innocence, status, career, artifact, or place must be knowingly given up.
+- Cost must be explicit, not symbolic only.
+
+transfer_cost
+- Save the current site or people by moving the burden elsewhere.
+- Cost should make the moral compromise visible.
+
+delay
+- Prevent disaster now, without truly ending it.
+- Cost should be that the scenario leaves a future wound or looming return.
+
+destroy_with_cost
+- Destroy a key object, structure, or process, but only if it has real setup and real collateral cost.
+- This must never be the sole obvious resolution.
+
+human_authority_solution
+- Use law, force, quarantine, port power, church authority, military pressure, institutional shutdown, or bureaucracy.
+- Cost should be coverup, violence, innocent harm, or loss of truth.
+
+occult_or_technical_override
+- Use understanding of the pattern, machinery, code, rite, architecture, or procedure to alter the outcome.
+- Cost should be risk, irreversibility, or making an already bad system temporarily functional.
+
+escape_and_bury
+- Survive and conceal the truth rather than resolve it cleanly.
+- Cost should be guilt, future recurrence, and damaged credibility.
+
+Resolution rules:
+- At least 1 resolution must protect immediate human life.
+- At least 1 resolution must impose a moral or political cost.
+- At least 1 resolution must create an uncertain future consequence.
+- If destroy_with_cost is present, it must not be the only viable option.
+- If bargain is present, it must not guarantee safety or honesty.
+- If expose is present, it must not promise that people will believe the truth.
+
+Climax behavior rule:
+- When the investigation has already exposed the core structure of the problem, the scenario must transition into a resolution state.
+- In that state, do not continue feeding more tiny clues about the same mechanism, site, or truth.
+- Instead, force one of the following:
+  - confrontation
+  - negotiation
+  - costly decision
+  - emergency rerouting
+  - containment action
+  - sacrifice or escape
+
+Output planning requirement:
+Before generating act 4, internally choose:
+- 2-4 resolution_type values
+- immediate cost of each
+- longer consequence of each

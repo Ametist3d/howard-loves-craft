@@ -1,11 +1,10 @@
 import logging
 import re
-
+#pylint: disable=import-error
 from utils.db_session import SessionDB
 from utils.helpers import (
     _normalize_name,
     _safe_json_loads,
-    get_language_name,
     kv_get,
     kv_set,
     read_prompt,
@@ -13,6 +12,33 @@ from utils.helpers import (
 
 logger = logging.getLogger("keeper_ai.helpers.state")
 
+_LOCATION_STOPWORDS = {
+    "the", "a", "an", "of", "in", "at", "on",
+    "room", "area", "sector", "zone", "site", "place",
+    "north", "south", "east", "west",
+}
+
+def _location_tokens(text: str) -> set[str]:
+    norm = _normalize_name(text or "")
+    words = re.findall(r"[a-z0-9]+", norm)
+    return {w for w in words if len(w) >= 4 and w not in _LOCATION_STOPWORDS}
+
+def _same_locationish(a: str, b: str) -> bool:
+    na = _normalize_name(a or "")
+    nb = _normalize_name(b or "")
+    if not na or not nb:
+        return False
+
+    if na == nb or na in nb or nb in na:
+        return True
+
+    ta = _location_tokens(a)
+    tb = _location_tokens(b)
+    if not ta or not tb:
+        return False
+
+    overlap = len(ta & tb)
+    return overlap >= max(1, min(len(ta), len(tb)) // 2)
 
 def _filter_met_npcs(npcs_text: str, all_keeper_chat: str) -> str:
     lines = [line for line in (npcs_text or "").splitlines() if line.strip()]
@@ -45,6 +71,24 @@ def _get_current_scene_obj(blueprint: dict, current_act: str, current_scene: str
             if _normalize_name(scene.get("scene", "")) == _normalize_name(current_scene):
                 return scene
     return {}
+
+
+def _clean_opening_objective_text(text: str) -> str:
+    text = str(text or "").strip()
+
+    # remove explicit act labels
+    text = re.sub(r"^\s*Act\s+\d+\s*:\s*", "", text, flags=re.IGNORECASE)
+
+    # if objective was generated in old machine format, keep only the actual lead
+    m = re.search(r"follow this lead:\s*(.+)$", text, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).strip(" .")
+
+    m = re.search(r"establish what is happening here\s*[—\-]\s*(.+)$", text, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).strip(" .")
+
+    return text.strip(" .")
 
 
 def _get_next_scene_obj(blueprint: dict, current_act: str, current_scene: str) -> dict:
@@ -176,6 +220,7 @@ def compact_blueprint_text(
     current_scene: str = "",
     met_npc_names: list[str] | None = None,
     found_clue_titles: list[str] | None = None,
+    include_next_hint: bool = True,
 ) -> str:
     """
     Return only the playable slice of the scenario blueprint.
@@ -209,7 +254,6 @@ def compact_blueprint_text(
 
     lines: list[str] = []
 
-    # Public top-level only
     for key in ["title", "era_and_setting", "inciting_hook", "atmosphere_notes"]:
         value = blueprint.get(key)
         if value:
@@ -225,7 +269,6 @@ def compact_blueprint_text(
     if current_scene_obj:
         lines.append("current_scene_frame:")
 
-        # Primary scene skeleton only
         for field in [
             "scene",
             "location",
@@ -254,26 +297,18 @@ def compact_blueprint_text(
         visible_scene_npcs = []
         visible_scene_clues = []
 
-    if next_scene_obj:
+    if include_next_hint and next_scene_obj:
         lines.append("next_reachable_scene_hint:")
         for field in ["scene", "location", "trigger", "threat_level"]:
             value = next_scene_obj.get(field)
             if value:
                 lines.append(f"- {field}={value}")
 
-    # ----- compact scene-aware registry slice -----
-
     current_location = str(current_scene_obj.get("location", "") or "").strip() if current_scene_obj else ""
 
-    # Allow only:
-    # - NPCs already met
-    # - NPCs explicitly present in current scene
     current_scene_npc_norm = {_norm(x) for x in visible_scene_npcs}
     allowed_npc_names = met_npc_names_norm | current_scene_npc_norm
 
-    # Allow only:
-    # - clues already found
-    # - clues explicitly available in current scene
     current_scene_clue_norm = {_norm(x) for x in visible_scene_clues}
     allowed_clue_titles = found_clue_titles_norm | current_scene_clue_norm
 
@@ -282,7 +317,6 @@ def compact_blueprint_text(
     clues = blueprint.get("clues") or []
     plot_threads = blueprint.get("plot_threads") or []
 
-    # Current location registry: compact only
     matched_locations = _match_registry_items_by_names(
         locations,
         [current_location] if current_location else [],
@@ -298,7 +332,6 @@ def compact_blueprint_text(
                 parts.append(f"hidden={loc.get('hidden', '')}")
             lines.append("- " + "; ".join(parts))
 
-    # Current / met NPC registry: compact only
     if allowed_npc_names and npcs:
         lines.append("current_npc_registry:")
         for npc in npcs:
@@ -315,7 +348,6 @@ def compact_blueprint_text(
                 parts.append(f"motivation={npc['motivation']}")
             lines.append("- " + "; ".join(parts))
 
-    # Current / found clue registry: compact only
     if allowed_clue_titles and clues:
         lines.append("current_clue_registry:")
         for clue in clues:
@@ -332,7 +364,6 @@ def compact_blueprint_text(
                 parts.append(f"location={clue['location']}")
             lines.append("- " + "; ".join(parts))
 
-    # Plot threads: keep compact and limited
     if plot_threads:
         lines.append("active_plot_threads:")
         for th in plot_threads[:2]:
@@ -349,7 +380,13 @@ def compact_blueprint_text(
     return "\n".join(lines) if lines else "(none)"
 
 
-def build_authoritative_context(db: SessionDB, *, campaign_atoms: str = "", themes: str = "STANDARD") -> tuple[str, str]:
+def build_authoritative_context(
+    db: SessionDB,
+    *,
+    campaign_atoms: str = "",
+    themes: str = "STANDARD",
+    include_next_hint: bool = True,
+) -> tuple[str, str]:
     cur = db.conn.cursor()
     digest = kv_get(cur, "story_digest", "")
     blueprint_raw = kv_get(cur, "scenario_blueprint_json", "{}")
@@ -404,7 +441,7 @@ def build_authoritative_context(db: SessionDB, *, campaign_atoms: str = "", them
             "This is the playable, current slice of the scenario blueprint.\n"
             "It is more authoritative than your genre priors.\n"
             "Do not invent unrelated threats, locations, factions, or act transitions.\n"
-            f"{compact_blueprint_text(blueprint, current_act=current_act, current_scene=current_scene, met_npc_names=met_npc_names, found_clue_titles=found_clue_titles)}\n"
+            f"{compact_blueprint_text(blueprint, current_act=current_act, current_scene=current_scene, met_npc_names=met_npc_names, found_clue_titles=found_clue_titles, include_next_hint=include_next_hint)}\n"
             "----------------------------------------"
         )
 
@@ -450,6 +487,17 @@ def build_authoritative_context(db: SessionDB, *, campaign_atoms: str = "", them
 
     return "\n\n".join(part for part in context_parts if part.strip()), state_str
 
+
+def _mentions_location_explicitly(location: str, *texts: str) -> bool:
+    loc_norm = _normalize_name(location)
+    if not loc_norm:
+        return False
+
+    for text in texts:
+        text_norm = _normalize_name(text or "")
+        if loc_norm and loc_norm in text_norm:
+            return True
+    return False
 
 def _current_state_snapshot_for_validation(db: SessionDB) -> dict:
     cur = db.conn.cursor()
@@ -608,13 +656,12 @@ def validate_opening_scene_response(db: SessionDB, result: dict) -> list[str]:
     if str(updates.get("thread_progress", "") or "").strip():
         violations.append("opening_thread_progress_too_early")
 
-    # Allow ONLY the current scene location (or empty)
-    start_location = _normalize_name(current_scene_obj.get("location", "") or snap["current_scene_location"])
-    new_location = _normalize_name(str(updates.get("location_name", "") or ""))
-    if new_location and start_location and new_location != start_location:
+    start_location_raw = str(current_scene_obj.get("location", "") or snap["current_scene_location"] or "")
+    new_location_raw = str(updates.get("location_name", "") or "")
+
+    if new_location_raw and start_location_raw and not _same_locationish(new_location_raw, start_location_raw):
         violations.append(f"opening_wrong_location:{updates.get('location_name', '')}")
 
-    # Do not reveal hidden truth / core mystery directly in opening
     hidden_threat = str(blueprint.get("hidden_threat", "") or "").strip()
     core_mystery = str(blueprint.get("core_mystery", "") or "").strip()
     never_suspect = str(blueprint.get("truth_the_players_never_suspect", "") or "").strip()
@@ -628,11 +675,12 @@ def validate_opening_scene_response(db: SessionDB, result: dict) -> list[str]:
         if forbidden and forbidden.lower() in lowered:
             violations.append(tag)
 
-    # Do not jump to later-act locations
     try:
         current_act_num = int(snap["current_act"] or 1)
     except Exception:
         current_act_num = 1
+
+    start_location_norm = str(current_scene_obj.get("location", "") or snap["current_scene_location"] or "")
 
     for act in blueprint.get("acts") or []:
         try:
@@ -641,9 +689,14 @@ def validate_opening_scene_response(db: SessionDB, result: dict) -> list[str]:
             act_num = 0
         if act_num <= current_act_num:
             continue
+
         for scene in act.get("scenes") or []:
             loc = str(scene.get("location", "") or "").strip()
-            if loc and loc.lower() in lowered:
+            if not loc:
+                continue
+            if _same_locationish(loc, start_location_norm):
+                continue
+            if _mentions_location_explicitly(loc, narrative, suggestions_blob):
                 violations.append(f"opening_later_act_location:{loc}")
 
     return violations
@@ -677,20 +730,52 @@ def build_opening_fallback_result(db: SessionDB) -> dict:
         narrative_parts.append(what_happens)
     elif scene_name:
         narrative_parts.append(f"This is the opening scene: {scene_name}.")
-    if current_objective:
-        narrative_parts.append(f"Right now, your immediate objective is: {current_objective}")
+    clean_objective = _clean_opening_objective_text(current_objective)
+    if clean_objective:
+        narrative_parts.append(f"One immediate lead stands out: {clean_objective}.")
 
     suggested_actions = []
-    if npcs:
-        suggested_actions.append(f"Talk to {npcs[0]}")
-    if clues:
-        suggested_actions.append(f"Examine {clues[0]}")
-    suggested_actions.append(f"Survey {location} for anything immediately out of place")
 
-    # keep exactly 3
-    suggested_actions = suggested_actions[:3]
+    if npcs:
+        suggested_actions.append(f"Talk to {npcs[0]} about what seems wrong here")
+
+    if clues:
+        suggested_actions.append(f"Examine {clues[0]} closely")
+
+    if clean_objective:
+        suggested_actions.append(clean_objective)
+
+    if location:
+        suggested_actions.append(f"Survey {location} for anything immediately out of place")
+
+    if description:
+        suggested_actions.append("Focus on the most suspicious visible detail in the room")
+
+    if what_happens:
+        suggested_actions.append("Test the anomaly that is already unfolding here")
+
+    # dedupe while preserving order
+    deduped = []
+    seen = set()
+    for item in suggested_actions:
+        key = item.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            deduped.append(item.strip())
+
+    suggested_actions = deduped[:3]
+
     while len(suggested_actions) < 3:
-        suggested_actions.append("Press the most obvious lead in front of you")
+        fallback_pool = [
+            "Question the nearest person about what just happened",
+            "Inspect the most abnormal machine, object, or trace",
+            "Compare what you see with what should normally be here",
+        ]
+        for item in fallback_pool:
+            if len(suggested_actions) >= 3:
+                break
+            if item.lower() not in {x.lower() for x in suggested_actions}:
+                suggested_actions.append(item)
 
     return {
         "narrative": " ".join(x.strip() for x in narrative_parts if x.strip()),
@@ -792,6 +877,22 @@ def sanitize_llm_result_on_validation_failure(result: dict, violations: list[str
     return safe
 
 
+def _text_match_loose(a: str, b: str) -> bool:
+    na = _normalize_name(a or "")
+    nb = _normalize_name(b or "")
+    if not na or not nb:
+        return False
+    return na == nb or na in nb or nb in na
+
+
+def _derive_scene_objective(scene: dict) -> str:
+    for key in ("trigger", "dramatic_question", "what_happens", "exit_condition"):
+        value = str(scene.get(key, "") or "").strip().rstrip(". ?")
+        if value:
+            return value
+    return ""
+
+
 def advance_blueprint_progress(db: SessionDB, result: dict) -> None:
     cur = db.conn.cursor()
     blueprint = _safe_json_loads(kv_get(cur, "scenario_blueprint_json", "{}"))
@@ -807,16 +908,20 @@ def advance_blueprint_progress(db: SessionDB, result: dict) -> None:
     updates = result.get("state_updates") or {}
     clue_found = str(updates.get("clue_found", "") or "").strip()
     location_name = str(updates.get("location_name", "") or "").strip()
+    thread_name = str(updates.get("thread_progress", "") or "").strip()
 
-    scene_clues = {_normalize_name(x) for x in (current_scene_obj.get("clues_available") or []) if x}
-    scene_location = _normalize_name(current_scene_obj.get("location", ""))
+    scene_clues = [str(x) for x in (current_scene_obj.get("clues_available") or []) if x]
+    scene_location = str(current_scene_obj.get("location", "") or "").strip()
 
     payoff_hit = False
 
-    if clue_found and _normalize_name(clue_found) in scene_clues:
+    if clue_found and any(_text_match_loose(clue_found, c) for c in scene_clues):
         payoff_hit = True
 
-    if location_name and _normalize_name(location_name) != scene_location:
+    if thread_name:
+        payoff_hit = True
+
+    if location_name and not _same_locationish(location_name, scene_location):
         payoff_hit = True
 
     if not payoff_hit:
@@ -831,28 +936,29 @@ def advance_blueprint_progress(db: SessionDB, result: dict) -> None:
     for act_idx, act in enumerate(acts):
         if int(act.get("act", 0) or 0) != current_act_num:
             continue
+
         scenes = act.get("scenes") or []
         for scene_idx, scene in enumerate(scenes):
             if _normalize_name(scene.get("scene", "")) != _normalize_name(current_scene):
                 continue
 
-            # next scene in same act
             if scene_idx + 1 < len(scenes):
                 next_scene = scenes[scene_idx + 1]
                 kv_set(db, "current_scene", str(next_scene.get("scene", "") or ""))
                 kv_set(db, "current_scene_location", str(next_scene.get("location", "") or ""))
+                kv_set(db, "current_objective", _derive_scene_objective(next_scene))
                 return
 
-            # first scene of next act
             if act_idx + 1 < len(acts):
                 next_act = acts[act_idx + 1]
                 next_scenes = next_act.get("scenes") or []
                 kv_set(db, "current_act", str(next_act.get("act", current_act_num + 1)))
                 if next_scenes:
-                    kv_set(db, "current_scene", str(next_scenes[0].get("scene", "") or ""))
-                    kv_set(db, "current_scene_location", str(next_scenes[0].get("location", "") or ""))
+                    next_scene = next_scenes[0]
+                    kv_set(db, "current_scene", str(next_scene.get("scene", "") or ""))
+                    kv_set(db, "current_scene_location", str(next_scene.get("location", "") or ""))
+                    kv_set(db, "current_objective", _derive_scene_objective(next_scene))
                 return
-
 
 def apply_state_updates(db: SessionDB, result: dict) -> None:
     """

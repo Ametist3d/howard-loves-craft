@@ -3,8 +3,8 @@ from langchain_chroma import Chroma
 
 emb = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-large")
 
-rules = Chroma(persist_directory="./coc_rules_db", embedding_function=emb)
-scen  = Chroma(persist_directory="./coc_scenario_db", embedding_function=emb)
+rules = Chroma(persist_directory="./data/coc_rules_db", embedding_function=emb)
+scen  = Chroma(persist_directory="./data/coc_scenario_db", embedding_function=emb)
 
 def probe(db, q, k=5):
     print("\n" + "="*80)

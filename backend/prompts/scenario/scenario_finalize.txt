@@ -1,0 +1,148 @@
+You are a scenario finalizer for Call of Cthulhu.
+Convert the supplied acts into the final blueprint JSON only.
+
+Write all prose field values in: {language_name}
+THEMES: {themes}
+ERA/SETTING CONSTRAINT: {era_context}
+
+STRUCTURE TARGETS:
+- target_act_count = {target_act_count}
+- target_total_scenes = {target_total_scenes}
+- target_scene_count_plan = {scene_count_plan}
+
+--- SCENARIO SEED ---
+{seed}
+---------------------
+
+--- CONDENSED ATOMS ---
+{atoms}
+-----------------------
+
+--- PLANNER JSON ---
+{plan_json}
+--------------------
+
+--- STORY JSON ---
+{story_json}
+---------------------
+
+--- ACTS JSON ---
+{acts_json}
+----------------
+
+FINALIZATION RULES:
+- Build the final blueprint from seed + planner JSON + story JSON + acts JSON.
+- Treat acts JSON as authoritative for act order, scene order, and scene count.
+- Do not add or remove acts.
+- Do not add or remove scenes.
+- Preserve the existing top-level meaning implied by the story and acts.
+- Remove any temporary planning fields such as module_type and scene_budget.
+- Produce the final compact registries: locations, npcs, clues, plot_threads.
+- Keep the exact field names shown below.
+- At least 2 plot threads.
+- At least 6 clues when target_total_scenes >= 8; otherwise at least 4 clues.
+- The climax must offer more than one viable resolution, cost, or tradeoff.
+- Registries must stay compact and non-redundant.
+- Keep prose concise.
+- Keep scene description and what_happens fields short.
+- Do not write comments.
+- Do not write markdown fences.
+- Do not add explanatory text outside the JSON object.
+- Output one valid JSON object only.
+
+REGISTRY RULES:
+- locations should be reusable, compact, and canonical.
+- npcs should not repeat scene prose; keep only role, secret, and motivation.
+- clues should capture surface meaning and true meaning.
+- plot_threads should be compact and playable.
+
+OUTPUT STRICT JSON ONLY:
+{{
+  "title": "Short evocative scenario title",
+  "era_and_setting": "Specific time and place (1-2 sentences)",
+  "atmosphere_notes": "Dominant sensory/emotional tone for the Keeper (1 sentence)",
+  "inciting_hook": "What draws investigators in — the surface-level call to action (1-2 sentences)",
+  "core_mystery": "The central hidden structure investigators uncover (1-2 sentences)",
+  "hidden_threat": "The Mythos entity, force, system, or agency at work, its goal, and its method (2-3 sentences)",
+  "truth_the_players_never_suspect": "The single biggest recontextualizing truth (1-2 sentences)",
+  "scenario_engine": {{
+    "surface_explanation": "The most plausible early explanation that seems true at first",
+    "actual_explanation": "What is really happening underneath the surface situation",
+    "false_leads": ["False lead 1", "False lead 2"],
+    "contradictions": ["Contradiction 1", "Contradiction 2"],
+    "reversals": ["Reversal 1", "Reversal 2"],
+    "dynamic_pressures": ["time pressure", "social or institutional pressure"],
+    "climax_choices": [
+      {{
+        "option": "A possible late-stage solution or compromise",
+        "cost": "What it costs immediately",
+        "consequence": "What happens if chosen"
+      }},
+      {{
+        "option": "Another viable solution or compromise",
+        "cost": "What it costs",
+        "consequence": "What happens if chosen"
+      }}
+    ]
+  }},
+  "acts": [
+    {{
+      "act": 1,
+      "title": "Act title",
+      "summary": "2-4 sentences",
+      "purpose": "1 sentence",
+      "belief_shift": "1 sentence",
+      "required_payoffs": ["payoff 1", "payoff 2"],
+      "scenes": [
+        {{
+          "scene": "Scene name",
+          "location": "Reusable location name",
+          "scene_function": "hook|misdirection|social pressure|clue reveal|danger escalation|investigation|obstruction|social conflict|reversal|betrayal|contradiction|reassessment|choice|climax|hard choice|final confrontation|aftermath",
+          "dramatic_question": "1 sentence",
+          "entry_condition": "1 sentence",
+          "exit_condition": "1 sentence",
+          "trigger": "1 sentence",
+          "description": "2-4 sentences",
+          "what_happens": "2-4 sentences",
+          "pressure_if_delayed": "1 sentence",
+          "reveals": ["What this scene can reveal"],
+          "conceals": ["What still remains hidden here"],
+          "clues_available": ["Clue title"],
+          "npc_present": ["NPC name"],
+          "threat_level": "none|tension|danger|combat",
+          "keeper_notes": "1-3 sentences"
+        }}
+      ]
+    }}
+  ],
+  "locations": [
+    {{
+      "name": "Reusable location name",
+      "tags": "entry|danger|clue|lair|social|transit|authority",
+      "hidden": "The single most important concealed fact about this place"
+    }}
+  ],
+  "npcs": [
+    {{
+      "name": "Name",
+      "role": "ally|neutral|enemy|hidden_enemy",
+      "secret": "What they truly are or hide",
+      "motivation": "What they want and why"
+    }}
+  ],
+  "clues": [
+    {{
+      "title": "Clue name",
+      "content": "Surface meaning of the clue",
+      "true_meaning": "What it actually implies",
+      "location": "Reusable location name"
+    }}
+  ],
+  "plot_threads": [
+    {{
+      "name": "Thread name",
+      "stakes": "What happens if investigators fail or ignore this thread",
+      "steps": 3
+    }}
+  ]
+}}

@@ -77,7 +77,7 @@ export class ApiService {
     });
     if (!response.ok) throw new Error("Failed to generate character");
     const charData = await response.json();
-    return buildInvestigator(charData, language);
+    return await buildInvestigator(charData, language, eraContext, userPrompt);
   }
 
   public async startSession(

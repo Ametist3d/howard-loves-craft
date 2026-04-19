@@ -1,0 +1,122 @@
+ACT MODULE PLANNER
+
+Build the scenario from act modules, not from a fixed universal act formula. Choose 3-4 act modules total. 4 is preferred for full scenarios; 3 is allowed for compact scenarios; 5 is rare and only allowed if the seed clearly supports broader scope.
+
+Each chosen act module must have:
+- a distinct purpose
+- a distinct mode of pressure
+- a distinct kind of payoff
+- a different relationship to the truth than the previous act
+
+Allowed act_module_type values:
+- arrival_and_briefing
+- surface_inquiry
+- witness_network
+- site_investigation
+- institutional_obstruction
+- parallel_leads
+- false_pattern_strengthens
+- danger_probe
+- hidden_logistics
+- social_crack
+- contradiction_reveal
+- betrayal_or_complicity
+- reversal_of_cause
+- negotiated_window
+- countdown_crisis
+- chase_or_containment
+- converging_threads
+- costly_climax
+- aftermath_choice
+
+Act module definitions:
+
+arrival_and_briefing
+- Introduce investigators to the ordinary surface situation, tone, authority structure, and immediate first lead.
+- Best for hooks that begin from a request, assignment, or arrival.
+
+surface_inquiry
+- Investigators talk to obvious people, inspect the obvious site, and gather explanations that seem to fit.
+- Best for act 1 or early act 2.
+
+witness_network
+- The scenario deepens through multiple witnesses with incompatible stories.
+- Good when social truth matters more than physical evidence.
+
+site_investigation
+- Physical search, scene comparison, records, architecture, or material anomalies deepen the case.
+- Good when place and mechanism matter.
+
+institutional_obstruction
+- A human authority, employer, police force, port office, clinic, church, or owner blocks access.
+- Use when social cost and secrecy are important.
+
+parallel_leads
+- At least 2 viable threads can be pursued in different order, and each changes interpretation of the other.
+- Good mid-scenario module.
+
+false_pattern_strengthens
+- The wrong explanation becomes more convincing before being overturned.
+- Use to prevent straight-line investigation.
+
+danger_probe
+- Investigators push into a risky space and gain evidence under immediate physical or psychological threat.
+- Use when risk must replace passive clue collection.
+
+hidden_logistics
+- The mystery turns out to involve repeated practical operations: transport, storage, feeding, timing, labor, maintenance, signaling, routing, paperwork, access, ritual sequence, or supply movement.
+- Good for scenarios where the Mythos behaves like a system rather than a single jump scare.
+
+social_crack
+- An NPC, witness, or authority reveals pressure, fear, contradiction, or personal complicity.
+- Good bridge from act 1 into act 2 or act 3.
+
+contradiction_reveal
+- An earlier explanation is plainly contradicted by new evidence.
+- This should materially change investigator assumptions.
+
+betrayal_or_complicity
+- Someone important is not what they seemed: not necessarily evil, but hiding, enabling, or rationalizing the problem.
+- Good act 3 module.
+
+reversal_of_cause
+- Investigators learn that what they thought was the cause is actually the effect, the signal is actually a response, the victim is actually a trigger, the coverup was a panic response, etc.
+- Use when the scenario's best twist is conceptual rather than personal.
+
+negotiated_window
+- A direct non-final contact or temporary understanding becomes possible.
+- Good when climax should be more than simple attack/destroy.
+
+countdown_crisis
+- A deadline now dominates play: ship arrival, public ceremony, shift change, storm, tide, dawn, outbreak stage, execution, ritual threshold, convoy, inspection, election, broadcast.
+- Use to force resolution pressure.
+
+chase_or_containment
+- Investigators must pursue, trap, isolate, or prevent transfer/escape rather than only discover more.
+- Good late act module.
+
+converging_threads
+- Separate leads finally point to the same hidden structure.
+- Best used late, before the climax.
+
+costly_climax
+- The scenario demands a real choice with loss, compromise, collateral harm, secrecy, exposure, bargain, or sacrifice.
+- This should not devolve into one more clue chain.
+
+afternath_choice
+- Optional final module for outcomes, moral burden, concealment, fallout, arrest, cover story, or future threat.
+- Use sparingly.
+
+Composition rules:
+- Do not repeat the same act_module_type twice unless the seed clearly justifies it.
+- At least 1 chosen module must strengthen a wrong explanation before overturning it.
+- At least 1 chosen module must create social or institutional pressure, not just physical exploration.
+- At least 1 chosen module must materially recontextualize earlier clues.
+- The final chosen module must be one of: costly_climax, countdown_crisis, chase_or_containment, negotiated_window.
+- Once the core structure is already understood, later modules must stop adding tiny partial clues and instead produce a decision, confrontation, consequence, or transition.
+
+Output planning requirement:
+Before generating scenes, internally choose:
+- act_count
+- ordered list of act_module_type values
+- what each module contributes to belief change

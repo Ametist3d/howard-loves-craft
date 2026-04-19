@@ -3,7 +3,7 @@ import logging
 import random
 import re
 from typing import Any, Dict, List, Optional, Tuple
-
+#pylint: disable=import-error
 from utils.db_session import SessionDB
 
 logger = logging.getLogger("keeper_ai.combat")
