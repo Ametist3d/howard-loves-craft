@@ -208,19 +208,49 @@ async def start_session(req: StartSessionRequest):
         logger.error(f"Session Start Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/api/session/{session_id}/blueprint", dependencies=[Depends(_verify_token)])
 async def get_session_blueprint(session_id: str):
     import json
     from utils.engine import active_dbs
+
     if session_id not in active_dbs:
         raise HTTPException(status_code=404, detail="Session not found")
+
     db = active_dbs[session_id]
     cur = db.conn.cursor()
-    cur.execute("SELECT value FROM kv_store WHERE key='scenario_blueprint_json'")
+
+    cur.execute("SELECT value FROM kv_store WHERE key='language'")
+    lang_row = cur.fetchone()
+    lang = (lang_row["value"] if lang_row and lang_row["value"] else "en").lower()
+
+    preferred_key = "scenario_blueprint_display_json" if lang != "en" else "scenario_blueprint_json"
+
+    cur.execute("SELECT value FROM kv_store WHERE key=?", (preferred_key,))
     row = cur.fetchone()
+
+    if (not row or not row["value"]) and preferred_key != "scenario_blueprint_json":
+        cur.execute("SELECT value FROM kv_store WHERE key='scenario_blueprint_json'")
+        row = cur.fetchone()
+
     if not row:
         raise HTTPException(status_code=404, detail="No blueprint stored for this session")
+
     return json.loads(row["value"])
+
+# @app.get("/api/session/{session_id}/blueprint", dependencies=[Depends(_verify_token)])
+# async def get_session_blueprint(session_id: str):
+#     import json
+#     from utils.engine import active_dbs
+#     if session_id not in active_dbs:
+#         raise HTTPException(status_code=404, detail="Session not found")
+#     db = active_dbs[session_id]
+#     cur = db.conn.cursor()
+#     cur.execute("SELECT value FROM kv_store WHERE key='scenario_blueprint_json'")
+#     row = cur.fetchone()
+#     if not row:
+#         raise HTTPException(status_code=404, detail="No blueprint stored for this session")
+#     return json.loads(row["value"])
 
 
 @app.post("/api/chat/stream", dependencies=[Depends(_verify_token)])

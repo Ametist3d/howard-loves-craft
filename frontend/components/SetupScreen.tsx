@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Language, PrebuiltScenario } from '../types';
-import { DATA_EN, DATA_RU } from '../data/names';
+import { getRandomName } from '../data/names';
+import { getRandomOccupation, getRandomBackground } from '../data/characterFlavor'
 import { apiService } from '../services/apiService';
+import { THEMES, getThemeLabel } from '../data/themeLabels';
 
 interface InvestigatorConfig {
   id: number;
@@ -23,30 +25,11 @@ interface Props {
   isLoading: boolean;
 }
 
-const THEMES = [
-  { id: 'classic',       labelRu: 'Классика',        labelEn: 'Classic' },
-  { id: 'expedition',    labelRu: 'Экспедиции',       labelEn: 'Expeditions' },
-  { id: 'urban',         labelRu: 'Урбанистика',      labelEn: 'Urban Horror' },
-  { id: 'rural',         labelRu: 'Глубинка',         labelEn: 'Rural' },
-  { id: 'mystic',        labelRu: 'Мистика',          labelEn: 'Mystic' },
-  { id: 'deep_space',    labelRu: 'Глубокий космос',  labelEn: 'Deep Space' },
-  { id: 'tech',          labelRu: 'Техно',            labelEn: 'Tech' },
-  { id: 'sea',           labelRu: 'Море',             labelEn: 'Sea' },
-  { id: 'arctic',        labelRu: 'Арктика',          labelEn: 'Arctic' },
-  { id: 'dream',         labelRu: 'Сновидения',       labelEn: 'Dreamlands' },
-  { id: 'subterranean',  labelRu: 'Подземелье',       labelEn: 'Subterranean' },
-  { id: 'war',           labelRu: 'Война',            labelEn: 'Wartime' },
-  { id: 'hospital',      labelRu: 'Больница',         labelEn: 'Hospital' },
-  { id: 'ancient',       labelRu: 'Древний мир',      labelEn: 'Ancient World' },
-  { id: 'suburban',      labelRu: 'Пригород',         labelEn: 'Suburban' },
-  { id: 'post_collapse', labelRu: 'После краха',      labelEn: 'Post-Collapse' },
-  { id: 'cult',          labelRu: 'Культы',           labelEn: 'Cults' },
-];
-
 const UI_TEXT: Record<string, { summoning: string; selectScenario: string; begin: string }> = {
   ua: { summoning: 'РИТУАЛ ВИКЛИКУ...',     selectScenario: 'Оберіть сценарій вище', begin: 'ПОЧАТИ'    },
   ru: { summoning: 'РИТУАЛ ПРИЗЫВА...',     selectScenario: 'Выберите сценарий выше', begin: 'НАЧАТЬ'   },
   en: { summoning: 'SUMMONING RITUAL...',   selectScenario: 'Select a scenario above', begin: 'BEGIN'   },
+  hr: { summoning: 'RITUAL PRIZIVANJA...', selectScenario: 'Odaberi scenarij iznad', begin: 'POČNI' },
   de: { summoning: 'BESCHWÖRUNGSRITUAL...', selectScenario: 'Szenario oben wählen',   begin: 'BEGINNEN' },
   fr: { summoning: 'RITUEL D\'INVOCATION...', selectScenario: 'Choisir un scénario', begin: 'COMMENCER' },
   pl: { summoning: 'RYTUAŁ PRZYWOŁANIA...', selectScenario: 'Wybierz scenariusz',    begin: 'ZACZNIJ'   },
@@ -87,12 +70,11 @@ export const SetupScreen: React.FC<Props> = ({ onStart, isLoading }) => {
   };
 
   const handleRandomFill = () => {
-    const data = language === 'ru' ? DATA_RU : DATA_EN;
-    setNewName(`${data.firstNames[Math.floor(Math.random() * data.firstNames.length)]} ${data.lastNames[Math.floor(Math.random() * data.lastNames.length)]}`);
-    setNewOccupation(data.occupations[Math.floor(Math.random() * data.occupations.length)]);
-    setNewBackground(data.backgrounds[Math.floor(Math.random() * data.backgrounds.length)]);
+    setNewName(getRandomName(language));
+    setNewOccupation(getRandomOccupation(language));
+    setNewBackground(getRandomBackground(language));
   };
-
+  
   const toggleTheme = (themeId: string) => {
     if (selectedThemes.includes(themeId)) setSelectedThemes(prev => prev.filter(t => t !== themeId));
     else if (selectedThemes.length < 3) setSelectedThemes(prev => [...prev, themeId]);
@@ -180,12 +162,17 @@ export const SetupScreen: React.FC<Props> = ({ onStart, isLoading }) => {
               )}
               {scenario === 'random' && (
                 <div className="flex flex-col gap-2">
-                  {THEMES.map(t => (
-                    <button key={t.id} onClick={() => toggleTheme(t.id)}
+                  {THEMES.map((theme) => (
+                    <button
+                      key={theme.id}
+                      onClick={() => toggleTheme(theme.id)}
                       className={`text-left px-3 py-2 rounded border text-xs flex justify-between items-center
-                        ${selectedThemes.includes(t.id) ? 'bg-cthulhu-800 border-cthulhu-blood text-cthulhu-paper' : 'bg-black/20 border-gray-800 text-gray-400'}`}>
-                      <span>{language === 'ru' ? t.labelRu : t.labelEn}</span>
-                      {selectedThemes.includes(t.id) && <span className="text-cthulhu-blood">✓</span>}
+                        ${selectedThemes.includes(theme.id)
+                          ? 'bg-cthulhu-800 border-cthulhu-blood text-cthulhu-paper'
+                          : 'bg-black/20 border-gray-800 text-gray-400'}`}
+                    >
+                      <span>{getThemeLabel(theme.id, language)}</span>
+                      {selectedThemes.includes(theme.id) && <span className="text-cthulhu-blood">✓</span>}
                     </button>
                   ))}
                 </div>

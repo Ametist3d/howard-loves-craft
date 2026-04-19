@@ -1,0 +1,107 @@
+You are a scenario architect for Call of Cthulhu.
+Expand the supplied plan into a playable scene skeleton JSON only.
+
+Write all prose field values in: {language_name}
+THEMES: {themes}
+ERA/SETTING CONSTRAINT: {era_context}
+
+--- SCENARIO SEED ---
+{seed}
+---------------------
+
+--- CONDENSED ATOMS ---
+{atoms}
+-----------------------
+
+--- PLANNER JSON ---
+{plan_json}
+--------------------
+
+RULES:
+- Keep the same core premise from the seed.
+- Build exactly 3 acts in most cases. 4 acts only if the seed clearly needs broader scope.
+- Each act must have 1-3 scenes.
+- Total scenes MUST be between 5 and 7.
+- At least 2 acts must contain 2 or more scenes.
+- Locations are reusable. The same location may appear in multiple scenes or acts.
+- Scenes should form a connected playable map, not a rigid corridor.
+- At least one act must strengthen a wrong explanation before overturning it.
+- At least one act must materially recontextualize earlier clues.
+- The last act must force costly resolution or aftermath, not one more clue chain.
+- Keep description prose compact.
+- Prefer short, functional scene skeletons over rich prose.
+- Do NOT output final registries yet beyond what is necessary for scene structure.
+- If your draft has fewer than 5 total scenes, expand it before output.
+- Output STRICT JSON only. No markdown. No comments. No explanatory prose outside JSON.
+
+OUTPUT STRICT JSON ONLY:
+{{
+  "title": "Short evocative scenario title",
+  "era_and_setting": "Specific time and place (1-2 sentences)",
+  "atmosphere_notes": "1 sentence",
+  "inciting_hook": "1-2 sentences",
+  "core_mystery": "1-2 sentences",
+  "hidden_threat": "2-3 sentences",
+  "truth_the_players_never_suspect": "1-2 sentences",
+  "acts": [
+    {{
+      "act": 1,
+      "module_type": "one chosen act module type from plan",
+      "title": "Act title",
+      "summary": "2-3 sentences",
+      "purpose": "1 sentence",
+      "belief_shift": "1 sentence",
+      "required_payoffs": ["payoff 1", "payoff 2"],
+      "scenes": [
+        {{
+          "scene": "Scene name",
+          "location": "Reusable location name",
+          "scene_function": "hook|misdirection|social pressure|clue reveal|danger escalation|investigation|obstruction|social conflict|reversal|betrayal|contradiction|reassessment|choice|climax|hard choice|final confrontation|aftermath",
+          "dramatic_question": "1 sentence",
+          "entry_condition": "1 sentence",
+          "exit_condition": "1 sentence",
+          "trigger": "1 sentence",
+          "description": "2-3 sentences",
+          "what_happens": "2-3 sentences",
+          "pressure_if_delayed": "1 sentence",
+          "reveals": ["reveal 1"],
+          "conceals": ["concealment 1"],
+          "clues_available": ["Clue title"],
+          "npc_present": ["NPC name"],
+          "threat_level": "none|tension|danger|combat",
+          "keeper_notes": "1-2 sentences"
+        }}
+      ]
+    }}
+  ],
+  "location_graph": [
+    {{
+      "name": "Reusable location name",
+      "tags": ["entry", "danger", "social"],
+      "connects_to": ["Another location"],
+      "why_it_matters": "1 sentence"
+    }}
+  ],
+  "npc_seeds": [
+    {{
+      "name": "NPC name",
+      "role_hint": "ally|neutral|enemy|hidden_enemy",
+      "function": "why this NPC matters"
+    }}
+  ],
+  "clue_map": [
+    {{
+      "title": "Clue title",
+      "placed_in": "Location name",
+      "surface_use": "What it seems to mean",
+      "deeper_use": "What it later means"
+    }}
+  ],
+  "thread_seeds": [
+    {{
+      "name": "Thread name",
+      "stakes": "1 sentence",
+      "steps": 3
+    }}
+  ]
+}}

@@ -124,15 +124,364 @@ LENGTH DISCIPLINE
 - Put most of the narrative richness into acts and scenes, not into registries.
 - Avoid repetition between scene descriptions, clue text, and registry entries.
 
+HOOK TYPE LIBRARY
+HOOK TYPE PLANNER
+
+Choose exactly 1 hook_type before writing the scenario. The hook defines the ordinary surface situation, the first actionable lead, the opening NPC posture, and the kind of misleading explanations that should appear early.
+
+Allowed hook_type values:
+- mystery_request
+- investigation_request
+- threat_warning
+- unusual_event
+- disappearance
+- murder
+- missing_shipment
+- strange_signal
+- escort_or_delivery
+- recovery_job
+- contamination_or_outbreak
+- inheritance_or_document
+- social_scandal
+- official_coverup
+
+Hook selection rules:
+- Choose the hook_type that best preserves the seed's ordinary surface premise.
+- Do not choose a lurid hook_type if the seed begins from a quiet or procedural situation.
+- The hook must create a concrete first step that investigators can take immediately.
+- The hook must not reveal the true hidden threat in plain form.
+- The hook should imply at least 2 plausible wrong explanations.
+
+Per-hook guidance:
+
+mystery_request
+- Someone asks investigators to explain a strange pattern, rumor, contradiction, or recurring anomaly.
+- Early play should center on testimony, records, and scene comparison.
+- Good false leads: superstition, fatigue, bad memory, gossip, local politics.
+
+investigation_request
+- A person, family, authority, employer, or institution hires or pressures investigators to look into a problem.
+- Early play should create tension between official expectations and what is actually happening.
+- Good false leads: bureaucratic failure, sabotage, petty crime, human corruption.
+
+threat_warning
+- Someone believes a danger is coming and asks for help before others take it seriously.
+- Early play should balance credibility versus panic.
+- Good false leads: paranoia, exaggeration, mistaken identity, routine hazard.
+
+unusual_event
+- A single disturbing, impossible, or ill-timed event disrupts an otherwise ordinary setting.
+- Early play should stay close to the immediate aftermath and competing explanations.
+- Good false leads: weather, equipment failure, prank, crowd confusion.
+
+disappearance
+- A person, group, vessel, item, or animal has gone missing under suspicious circumstances.
+- Early play should emphasize timeline reconstruction and conflicting accounts.
+- Good false leads: voluntary flight, accident, affair, theft, ordinary loss.
+
+murder
+- A death or apparent murder begins the case.
+- Early play should preserve ambiguity around cause, motive, and opportunity.
+- Good false leads: human jealousy, inheritance, revenge, drunken violence, local feud.
+
+missing_shipment
+- Something expected to arrive, depart, or be transferred has vanished or been diverted.
+- Early play should foreground logistics, schedules, manifests, and institutional pressure.
+- Good false leads: smuggling, clerical error, union conflict, piracy, weather.
+
+strange_signal
+- A message, signal, code, call, pattern, or transmission behaves as if it has intent or impossible origin.
+- Early play should compare technical explanation against witness testimony.
+- Good false leads: interference, fraud, military testing, atmospheric conditions.
+
+escort_or_delivery
+- Investigators must transport, escort, hand over, or protect something or someone.
+- Early play should begin with the assignment and the first signs that the job's surface purpose is false.
+- Good false leads: theft, interception, contractual betrayal, routine danger.
+
+recovery_job
+- Investigators are asked to retrieve an item, document, person, or device from a site.
+- Early play should focus on why recovery matters and who else may want the target.
+- Good false leads: salvage dispute, ownership conflict, trespass, academic rivalry.
+
+contamination_or_outbreak
+- Something is spreading, spoiling, infecting, or degrading bodies, minds, livestock, supply, or environment.
+- Early play should not immediately confirm whether the cause is medical, industrial, environmental, or Mythos.
+- Good false leads: toxin, disease, mold, food poisoning, industrial waste.
+
+inheritance_or_document
+- A will, map, diary, archive, legal packet, journal, or recovered paper draws investigators in.
+- Early play should present the document as incomplete, misleading, or too easily dismissed.
+- Good false leads: forgery, family lie, delusion, old scandal, bad translation.
+
+social_scandal
+- A rumor, affair, disgrace, or public embarrassment conceals the real disturbance.
+- Early play should make reputation and secrecy matter as much as direct danger.
+- Good false leads: blackmail, adultery, class resentment, political sabotage.
+
+official_coverup
+- Authorities, employers, clergy, police, port service, medical staff, or local elites suppress something.
+- Early play should make the coverup plausible for human reasons before revealing what lies beneath it.
+- Good false leads: corruption only, careerism, panic control, budget concealment.
+
+Hook output requirement:
+Before generating acts, internally determine:
+- hook_type
+- opening_surface_problem
+- first_actionable_lead
+- 2 plausible wrong explanations suggested by the hook
+
+ACT MODULE TYPE LIBRARY
+ACT MODULE PLANNER
+
+Build the scenario from act modules, not from a fixed universal act formula. Choose 3-4 act modules total. 4 is preferred for full scenarios; 3 is allowed for compact scenarios; 5 is rare and only allowed if the seed clearly supports broader scope.
+
+Each chosen act module must have:
+- a distinct purpose
+- a distinct mode of pressure
+- a distinct kind of payoff
+- a different relationship to the truth than the previous act
+
+Allowed act_module_type values:
+- arrival_and_briefing
+- surface_inquiry
+- witness_network
+- site_investigation
+- institutional_obstruction
+- parallel_leads
+- false_pattern_strengthens
+- danger_probe
+- hidden_logistics
+- social_crack
+- contradiction_reveal
+- betrayal_or_complicity
+- reversal_of_cause
+- negotiated_window
+- countdown_crisis
+- chase_or_containment
+- converging_threads
+- costly_climax
+- aftermath_choice
+
+Act module definitions:
+
+arrival_and_briefing
+- Introduce investigators to the ordinary surface situation, tone, authority structure, and immediate first lead.
+- Best for hooks that begin from a request, assignment, or arrival.
+
+surface_inquiry
+- Investigators talk to obvious people, inspect the obvious site, and gather explanations that seem to fit.
+- Best for act 1 or early act 2.
+
+witness_network
+- The scenario deepens through multiple witnesses with incompatible stories.
+- Good when social truth matters more than physical evidence.
+
+site_investigation
+- Physical search, scene comparison, records, architecture, or material anomalies deepen the case.
+- Good when place and mechanism matter.
+
+institutional_obstruction
+- A human authority, employer, police force, port office, clinic, church, or owner blocks access.
+- Use when social cost and secrecy are important.
+
+parallel_leads
+- At least 2 viable threads can be pursued in different order, and each changes interpretation of the other.
+- Good mid-scenario module.
+
+false_pattern_strengthens
+- The wrong explanation becomes more convincing before being overturned.
+- Use to prevent straight-line investigation.
+
+danger_probe
+- Investigators push into a risky space and gain evidence under immediate physical or psychological threat.
+- Use when risk must replace passive clue collection.
+
+hidden_logistics
+- The mystery turns out to involve repeated practical operations: transport, storage, feeding, timing, labor, maintenance, signaling, routing, paperwork, access, ritual sequence, or supply movement.
+- Good for scenarios where the Mythos behaves like a system rather than a single jump scare.
+
+social_crack
+- An NPC, witness, or authority reveals pressure, fear, contradiction, or personal complicity.
+- Good bridge from act 1 into act 2 or act 3.
+
+contradiction_reveal
+- An earlier explanation is plainly contradicted by new evidence.
+- This should materially change investigator assumptions.
+
+betrayal_or_complicity
+- Someone important is not what they seemed: not necessarily evil, but hiding, enabling, or rationalizing the problem.
+- Good act 3 module.
+
+reversal_of_cause
+- Investigators learn that what they thought was the cause is actually the effect, the signal is actually a response, the victim is actually a trigger, the coverup was a panic response, etc.
+- Use when the scenario's best twist is conceptual rather than personal.
+
+negotiated_window
+- A direct non-final contact or temporary understanding becomes possible.
+- Good when climax should be more than simple attack/destroy.
+
+countdown_crisis
+- A deadline now dominates play: ship arrival, public ceremony, shift change, storm, tide, dawn, outbreak stage, execution, ritual threshold, convoy, inspection, election, broadcast.
+- Use to force resolution pressure.
+
+chase_or_containment
+- Investigators must pursue, trap, isolate, or prevent transfer/escape rather than only discover more.
+- Good late act module.
+
+converging_threads
+- Separate leads finally point to the same hidden structure.
+- Best used late, before the climax.
+
+costly_climax
+- The scenario demands a real choice with loss, compromise, collateral harm, secrecy, exposure, bargain, or sacrifice.
+- This should not devolve into one more clue chain.
+
+afternath_choice
+- Optional final module for outcomes, moral burden, concealment, fallout, arrest, cover story, or future threat.
+- Use sparingly.
+
+Composition rules:
+- Do not repeat the same act_module_type twice unless the seed clearly justifies it.
+- At least 1 chosen module must strengthen a wrong explanation before overturning it.
+- At least 1 chosen module must create social or institutional pressure, not just physical exploration.
+- At least 1 chosen module must materially recontextualize earlier clues.
+- The final chosen module must be one of: costly_climax, countdown_crisis, chase_or_containment, negotiated_window.
+- Once the core structure is already understood, later modules must stop adding tiny partial clues and instead produce a decision, confrontation, consequence, or transition.
+
+Output planning requirement:
+Before generating scenes, internally choose:
+- act_count
+- ordered list of act_module_type values
+- what each module contributes to belief change
+
+RESOLUTION TYPE LIBRARY
+RESOLUTION TYPE PLANNER
+
+Choose 2-4 possible resolution types for the climax. At least 2 must be viable. Each must carry a real cost, tradeoff, compromise, or future consequence. Do not make one obviously correct solution unless the seed explicitly demands tragedy.
+
+Allowed resolution_type values:
+- suppress
+- expose
+- contain
+- bargain
+- evacuate
+- misdirect
+- sever
+- sacrifice
+- transfer_cost
+- delay
+- destroy_with_cost
+- human_authority_solution
+- occult_or_technical_override
+- escape_and_bury
+
+Resolution definitions:
+
+suppress
+- Stop the immediate process, signal, ritual, transmission, exchange, or manifestation.
+- Cost should affect safety, reputation, evidence, innocents, or future risk.
+
+expose
+- Reveal the truth publicly or to authority.
+- Cost should be panic, disbelief, scapegoating, legal danger, loss of secrecy, or collapse of trust.
+
+contain
+- Keep the problem isolated without solving its deeper cause.
+- Cost should be maintenance burden, secrecy, collateral damage, or future recurrence.
+
+bargain
+- Negotiate with the force, faction, or agency behind the problem.
+- Cost should be moral compromise, future debt, hidden concession, or release of something unsafe.
+
+evacuate
+- Save lives by abandoning property, evidence, reputation, territory, or strategic advantage.
+- Cost should be unresolved threat or loss of truth.
+
+misdirect
+- Feed false information, false navigation, false timing, false identity, or false target to redirect danger.
+- Cost should be collateral harm, confusion, or loss of control.
+
+sever
+- Break the connection between two systems, groups, spaces, or signals.
+- Cost should be damage to ordinary human functions, isolation, or irreversible loss.
+
+sacrifice
+- Someone, something, access, innocence, status, career, artifact, or place must be knowingly given up.
+- Cost must be explicit, not symbolic only.
+
+transfer_cost
+- Save the current site or people by moving the burden elsewhere.
+- Cost should make the moral compromise visible.
+
+delay
+- Prevent disaster now, without truly ending it.
+- Cost should be that the scenario leaves a future wound or looming return.
+
+destroy_with_cost
+- Destroy a key object, structure, or process, but only if it has real setup and real collateral cost.
+- This must never be the sole obvious resolution.
+
+human_authority_solution
+- Use law, force, quarantine, port power, church authority, military pressure, institutional shutdown, or bureaucracy.
+- Cost should be coverup, violence, innocent harm, or loss of truth.
+
+occult_or_technical_override
+- Use understanding of the pattern, machinery, code, rite, architecture, or procedure to alter the outcome.
+- Cost should be risk, irreversibility, or making an already bad system temporarily functional.
+
+escape_and_bury
+- Survive and conceal the truth rather than resolve it cleanly.
+- Cost should be guilt, future recurrence, and damaged credibility.
+
+Resolution rules:
+- At least 1 resolution must protect immediate human life.
+- At least 1 resolution must impose a moral or political cost.
+- At least 1 resolution must create an uncertain future consequence.
+- If destroy_with_cost is present, it must not be the only viable option.
+- If bargain is present, it must not guarantee safety or honesty.
+- If expose is present, it must not promise that people will believe the truth.
+
+Climax behavior rule:
+- When the investigation has already exposed the core structure of the problem, the scenario must transition into a resolution state.
+- In that state, do not continue feeding more tiny clues about the same mechanism, site, or truth.
+- Instead, force one of the following:
+  - confrontation
+  - negotiation
+  - costly decision
+  - emergency rerouting
+  - containment action
+  - sacrifice or escape
+
+Output planning requirement:
+Before generating act 4, internally choose:
+- 2-4 resolution_type values
+- immediate cost of each
+- longer consequence of each
+
+STRUCTURE RULES
+- Generate 4 acts.
+- Scene distribution by act: [1, 1, 1, 3].
+- Total scene count must be 6.
+- Use the act skeleton shown below, but fill each act's summary, purpose, belief_shift, and required_payoffs according to its chosen act module type.
+- The chosen act module sequence for this run is: false_pattern_strengthens, danger_probe, converging_threads, aftermath_choice.
+- Locations form a connected reusable graph, not a one-location-per-scene corridor.
+- The same named location may appear in multiple scenes and across multiple acts.
+- Scenes may reopen old places with new pressure, altered access, new NPC presence, or changed meaning.
+- Keep the same JSON field names shown below. Do not rename, remove, or replace them.
+- Acts 1..N should escalate from surface situation toward contradiction, recontextualization, pressure, and costly resolution.
+- The final act must still deliver more than one viable resolution, cost, or tradeoff.
+- Do not add extra top-level sections beyond the schema below.
+
 OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
 {{
   "title": "Short evocative scenario title",
   "era_and_setting": "Specific time and place (1-2 sentences)",
   "atmosphere_notes": "Dominant sensory/emotional tone for the Keeper (1 sentence)",
   "inciting_hook": "What draws investigators in — the surface-level call to action (1-2 sentences)",
-  "core_mystery": "The central secret investigators uncover at the end (1-2 sentences)",
-  "hidden_threat": "The Mythos entity or force at work, its goal, and its method (2-3 sentences)",
-  "truth_the_players_never_suspect": "The single biggest twist — something that recontextualizes everything once revealed (1-2 sentences)",
+  "core_mystery": "The central hidden structure investigators uncover (1-2 sentences)",
+  "hidden_threat": "The Mythos entity, force, system, or agency at work, its goal, and its method (2-3 sentences)",
+  "truth_the_players_never_suspect": "The single biggest recontextualizing truth (1-2 sentences)",
   "scenario_engine": {{
     "surface_explanation": "The most plausible early explanation that seems true at first",
     "actual_explanation": "What is really happening underneath the surface situation",
@@ -150,16 +499,16 @@ OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
     ],
     "dynamic_pressures": [
       "time pressure",
-      "social pressure"
+      "social or institutional pressure"
     ],
     "climax_choices": [
       {{
-        "option": "A possible climax solution",
-        "cost": "What it costs",
+        "option": "A possible late-stage solution or compromise",
+        "cost": "What it costs immediately",
         "consequence": "What happens if chosen"
       }},
       {{
-        "option": "Another possible climax solution",
+        "option": "Another viable solution or compromise",
         "cost": "What it costs",
         "consequence": "What happens if chosen"
       }}
@@ -169,186 +518,168 @@ OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
     {{
       "act": 1,
       "title": "Act 1 title",
-      "summary": "Surface situation, first anomaly, and first competing interpretations (2-4 sentences)",
-      "purpose": "Establish the ordinary surface situation and introduce conflicting explanations",
-      "belief_shift": "What investigators think at the start versus what they suspect by the end of the act",
+      "summary": "Evidence appears to confirm the misleading theory, raising the cost of abandoning it.",
+      "purpose": "Let the wrong explanation become more convincing before overturning it later.",
+      "belief_shift": "Investigators commit to an explanation that later evidence will crack open.",
       "required_payoffs": [
-        "first anomaly",
-        "first contradiction"
+        "false lead strengthened",
+        "future contradiction seeded"
       ],
       "scenes": [
         {{
           "scene": "Scene 1 name",
-          "location": "Location name",
-          "scene_function": "hook|misdirection|social pressure|clue reveal|danger escalation",
-          "dramatic_question": "What uncertainty or tension defines this scene",
+          "location": "Choose from the reusable location graph; locations may repeat across scenes and acts",
+          "scene_function": "social pressure",
+          "dramatic_question": "What uncertainty, pressure, or decision defines this scene",
           "entry_condition": "Why this scene becomes available now",
           "exit_condition": "What must be learned, decided, or suffered before moving on",
-          "trigger": "What causes investigators to come here or this scene to begin",
-          "description": "What the investigators experience when they arrive — sights, sounds, mood (2-4 sentences)",
-          "what_happens": "The key event, encounter, or discovery in this scene (2-4 sentences)",
-          "pressure_if_delayed": "What gets worse if investigators stall here",
+          "trigger": "What starts this scene or makes it unavoidable",
+          "description": "Atmospheric arrival description grounded in the current setting (2-4 sentences)",
+          "what_happens": "Key development for this scene, shaped by the act module's function (2-4 sentences)",
+          "pressure_if_delayed": "What gets worse if investigators hesitate here",
           "reveals": ["What this scene can reveal"],
           "conceals": ["What still remains hidden here"],
-          "clues_available": ["Clue title 1", "Clue title 2"],
+          "clues_available": ["Clue title"],
           "npc_present": ["NPC name"],
           "threat_level": "none|tension|danger|combat",
-          "keeper_notes": "Behind-the-scenes guidance — what the Keeper should emphasize, conceal, or misdirect (1-3 sentences)"
-        }},
-        {{
-          "scene": "Scene 2 name",
-          "location": "Location name",
-          "scene_function": "hook|misdirection|social pressure|clue reveal|danger escalation",
-          "dramatic_question": "What uncertainty or tension defines this scene",
-          "entry_condition": "Why this scene becomes available now",
-          "exit_condition": "What must be learned, decided, or suffered before moving on",
-          "trigger": "What leads here from the previous scene",
-          "description": "Atmospheric arrival description",
-          "what_happens": "A second key development, contradiction, or obstacle",
-          "pressure_if_delayed": "What gets worse if investigators stall here",
-          "reveals": ["What this scene can reveal"],
-          "conceals": ["What still remains hidden here"],
-          "clues_available": ["Clue title 3"],
-          "npc_present": [],
-          "threat_level": "none|tension|danger|combat",
-          "keeper_notes": "Keeper guidance"
+          "keeper_notes": "Behind-the-scenes guidance for emphasis, concealment, redirection, or consequence"
         }}
       ]
     }},
     {{
       "act": 2,
       "title": "Act 2 title",
-      "summary": "Investigation deepens, pressure rises, and new complications emerge (2-4 sentences)",
-      "purpose": "Deepen the investigation through discovery, social conflict, obstruction, or danger",
-      "belief_shift": "How the investigators' understanding becomes more complex",
+      "summary": "The truth advances because investigators push into a dangerous space rather than because another witness calmly explains it.",
+      "purpose": "Trade passive investigation for risky contact, entry, descent, trespass, or exposure.",
+      "belief_shift": "The case is no longer safe to study from the outside.",
       "required_payoffs": [
-        "one false lead strengthened",
-        "one real lead deepened"
+        "risk under pressure",
+        "evidence gained at a price"
       ],
       "scenes": [
         {{
           "scene": "Scene 1 name",
-          "location": "Location name",
-          "scene_function": "investigation|obstruction|social conflict|danger escalation",
-          "dramatic_question": "What uncertainty or tension defines this scene",
+          "location": "Choose from the reusable location graph; locations may repeat across scenes and acts",
+          "scene_function": "combat",
+          "dramatic_question": "What uncertainty, pressure, or decision defines this scene",
           "entry_condition": "Why this scene becomes available now",
           "exit_condition": "What must be learned, decided, or suffered before moving on",
-          "trigger": "What triggers this scene",
-          "description": "Atmospheric arrival description",
-          "what_happens": "Key event, discovery, obstruction, or danger",
-          "pressure_if_delayed": "What gets worse if investigators stall here",
+          "trigger": "What starts this scene or makes it unavoidable",
+          "description": "Atmospheric arrival description grounded in the current setting (2-4 sentences)",
+          "what_happens": "Key development for this scene, shaped by the act module's function (2-4 sentences)",
+          "pressure_if_delayed": "What gets worse if investigators hesitate here",
           "reveals": ["What this scene can reveal"],
           "conceals": ["What still remains hidden here"],
-          "clues_available": ["Clue title 4"],
+          "clues_available": ["Clue title"],
           "npc_present": ["NPC name"],
-          "threat_level": "tension|danger|combat",
-          "keeper_notes": "Keeper guidance"
-        }},
-        {{
-          "scene": "Scene 2 name",
-          "location": "Location name",
-          "scene_function": "investigation|obstruction|social conflict|danger escalation",
-          "dramatic_question": "What uncertainty or tension defines this scene",
-          "entry_condition": "Why this scene becomes available now",
-          "exit_condition": "What must be learned, decided, or suffered before moving on",
-          "trigger": "What leads investigators here",
-          "description": "Atmospheric arrival description",
-          "what_happens": "Another discovery, conflict, or setback",
-          "pressure_if_delayed": "What gets worse if investigators stall here",
-          "reveals": ["What this scene can reveal"],
-          "conceals": ["What still remains hidden here"],
-          "clues_available": ["Clue title 5"],
-          "npc_present": [],
-          "threat_level": "tension|danger|combat",
-          "keeper_notes": "Keeper guidance"
+          "threat_level": "none|tension|danger|combat",
+          "keeper_notes": "Behind-the-scenes guidance for emphasis, concealment, redirection, or consequence"
         }}
       ]
     }},
     {{
       "act": 3,
       "title": "Act 3 title",
-      "summary": "A reversal, betrayal, or contradiction changes the investigators' understanding (2-4 sentences)",
-      "purpose": "Recontextualize earlier clues and force a new understanding",
-      "belief_shift": "What they believed before the reversal and what they believe after it",
+      "summary": "Independent threads now point at the same underlying engine, actor, or process.",
+      "purpose": "Bring multiple leads into one revealed hidden structure.",
+      "belief_shift": "Fragmented evidence resolves into one coherent architecture of truth.",
       "required_payoffs": [
-        "one contradiction resolved",
-        "one reversal delivered"
+        "threads converge",
+        "shared hidden structure"
       ],
       "scenes": [
         {{
           "scene": "Scene 1 name",
-          "location": "Location name",
-          "scene_function": "reversal|betrayal|contradiction|danger escalation",
-          "dramatic_question": "What uncertainty or tension defines this scene",
+          "location": "Choose from the reusable location graph; locations may repeat across scenes and acts",
+          "scene_function": "contradiction",
+          "dramatic_question": "What uncertainty, pressure, or decision defines this scene",
           "entry_condition": "Why this scene becomes available now",
           "exit_condition": "What must be learned, decided, or suffered before moving on",
-          "trigger": "What triggers the reversal",
-          "description": "Atmospheric arrival description",
-          "what_happens": "A revelation or contradiction changes the meaning of earlier clues",
-          "pressure_if_delayed": "What gets worse if investigators stall here",
+          "trigger": "What starts this scene or makes it unavoidable",
+          "description": "Atmospheric arrival description grounded in the current setting (2-4 sentences)",
+          "what_happens": "Key development for this scene, shaped by the act module's function (2-4 sentences)",
+          "pressure_if_delayed": "What gets worse if investigators hesitate here",
           "reveals": ["What this scene can reveal"],
           "conceals": ["What still remains hidden here"],
-          "clues_available": ["Clue title 6"],
+          "clues_available": ["Clue title"],
           "npc_present": ["NPC name"],
-          "threat_level": "tension|danger|combat",
-          "keeper_notes": "Keeper guidance"
-        }},
-        {{
-          "scene": "Scene 2 name",
-          "location": "Location name",
-          "scene_function": "reassessment|choice|danger escalation",
-          "dramatic_question": "What uncertainty or tension defines this scene",
-          "entry_condition": "Why this scene becomes available now",
-          "exit_condition": "What must be learned, decided, or suffered before moving on",
-          "trigger": "What follows from the revelation",
-          "description": "Atmospheric arrival description",
-          "what_happens": "Investigators must reassess, choose, or act under new understanding",
-          "pressure_if_delayed": "What gets worse if investigators stall here",
-          "reveals": ["What this scene can reveal"],
-          "conceals": ["What still remains hidden here"],
-          "clues_available": [],
-          "npc_present": [],
-          "threat_level": "danger|combat",
-          "keeper_notes": "Keeper guidance"
+          "threat_level": "none|tension|danger|combat",
+          "keeper_notes": "Behind-the-scenes guidance for emphasis, concealment, redirection, or consequence"
         }}
       ]
     }},
     {{
       "act": 4,
-      "title": "Climax act title",
-      "summary": "All threads converge into confrontation, sacrifice, escape, or a hard choice (2-4 sentences)",
-      "purpose": "Deliver the climax and force a costly resolution",
-      "belief_shift": "What the investigators finally understand and what they must now decide",
+      "title": "Act 4 title",
+      "summary": "The immediate danger may be past, but the scenario still demands a choice about what truth, guilt, or future consequence remains.",
+      "purpose": "Handle concealment, fallout, moral burden, reprisals, future threat, or cover story after the main crisis breaks.",
+      "belief_shift": "Resolution becomes burden rather than pure victory.",
       "required_payoffs": [
-        "multiple possible resolutions",
-        "costly choice or tradeoff"
+        "fallout handled",
+        "future consequence framed"
       ],
       "scenes": [
         {{
-          "scene": "Final confrontation scene name",
-          "location": "Climax location",
-          "scene_function": "climax|hard choice|final confrontation",
-          "dramatic_question": "What must the investigators sacrifice, protect, or decide",
-          "entry_condition": "Why this scene becomes unavoidable now",
-          "exit_condition": "What resolves the scenario from here",
-          "trigger": "What forces investigators here",
-          "description": "The horror of what they find",
-          "what_happens": "How the climax plays out — include multiple possible solutions, costs, or tradeoffs",
-          "pressure_if_delayed": "What gets worse each moment investigators hesitate",
-          "reveals": ["What this scene finally reveals"],
-          "conceals": ["What still remains uncertain even here"],
-          "clues_available": [],
+          "scene": "Scene 1 name",
+          "location": "Choose from the reusable location graph; locations may repeat across scenes and acts",
+          "scene_function": "aftermath",
+          "dramatic_question": "What uncertainty, pressure, or decision defines this scene",
+          "entry_condition": "Why this scene becomes available now",
+          "exit_condition": "What must be learned, decided, or suffered before moving on",
+          "trigger": "What starts this scene or makes it unavoidable",
+          "description": "Atmospheric arrival description grounded in the current setting (2-4 sentences)",
+          "what_happens": "Key development for this scene, shaped by the act module's function (2-4 sentences)",
+          "pressure_if_delayed": "What gets worse if investigators hesitate here",
+          "reveals": ["What this scene can reveal"],
+          "conceals": ["What still remains hidden here"],
+          "clues_available": ["Clue title"],
           "npc_present": ["NPC name"],
-          "threat_level": "danger|combat",
-          "keeper_notes": "Win/lose conditions, hard choices, escape routes, and what happens if they fail"
+          "threat_level": "none|tension|danger|combat",
+          "keeper_notes": "Behind-the-scenes guidance for emphasis, concealment, redirection, or consequence"
+        }},
+        {{
+          "scene": "Scene 2 name",
+          "location": "Choose from the reusable location graph; locations may repeat across scenes and acts",
+          "scene_function": "reassessment",
+          "dramatic_question": "What uncertainty, pressure, or decision defines this scene",
+          "entry_condition": "Why this scene becomes available now",
+          "exit_condition": "What must be learned, decided, or suffered before moving on",
+          "trigger": "What starts this scene or makes it unavoidable",
+          "description": "Atmospheric arrival description grounded in the current setting (2-4 sentences)",
+          "what_happens": "Key development for this scene, shaped by the act module's function (2-4 sentences)",
+          "pressure_if_delayed": "What gets worse if investigators hesitate here",
+          "reveals": ["What this scene can reveal"],
+          "conceals": ["What still remains hidden here"],
+          "clues_available": ["Clue title"],
+          "npc_present": ["NPC name"],
+          "threat_level": "none|tension|danger|combat",
+          "keeper_notes": "Behind-the-scenes guidance for emphasis, concealment, redirection, or consequence"
+        }},
+        {{
+          "scene": "Scene 3 name",
+          "location": "Choose from the reusable location graph; locations may repeat across scenes and acts",
+          "scene_function": "choice",
+          "dramatic_question": "What uncertainty, pressure, or decision defines this scene",
+          "entry_condition": "Why this scene becomes available now",
+          "exit_condition": "What must be learned, decided, or suffered before moving on",
+          "trigger": "What starts this scene or makes it unavoidable",
+          "description": "Atmospheric arrival description grounded in the current setting (2-4 sentences)",
+          "what_happens": "Key development for this scene, shaped by the act module's function (2-4 sentences)",
+          "pressure_if_delayed": "What gets worse if investigators hesitate here",
+          "reveals": ["What this scene can reveal"],
+          "conceals": ["What still remains hidden here"],
+          "clues_available": ["Clue title"],
+          "npc_present": ["NPC name"],
+          "threat_level": "none|tension|danger|combat",
+          "keeper_notes": "Behind-the-scenes guidance for emphasis, concealment, redirection, or consequence"
         }}
       ]
     }}
   ],
   "locations": [
     {{
-      "name": "Location name",
-      "tags": "entry|danger|clue|lair",
+      "name": "Reusable location name",
+      "tags": "entry|danger|clue|lair|social|transit|authority",
       "hidden": "The single most important concealed fact about this place"
     }}
   ],
@@ -363,16 +694,16 @@ OUTPUT STRICT JSON ONLY (no markdown, no text outside braces):
   "clues": [
     {{
       "title": "Clue name",
-      "content": "What investigators find and its surface meaning",
+      "content": "Surface meaning of the clue",
       "true_meaning": "What it actually implies",
-      "location": "Location name where found"
+      "location": "Reusable location name"
     }}
   ],
   "plot_threads": [
     {{
       "name": "Thread name",
       "stakes": "What happens if investigators fail or ignore this thread",
-      "steps": 4
+      "steps": 3
     }}
   ]
 }}

@@ -1,0 +1,105 @@
+HOOK TYPE PLANNER
+
+Choose exactly 1 hook_type before writing the scenario. The hook defines the ordinary surface situation, the first actionable lead, the opening NPC posture, and the kind of misleading explanations that should appear early.
+
+Allowed hook_type values:
+- mystery_request
+- investigation_request
+- threat_warning
+- unusual_event
+- disappearance
+- murder
+- missing_shipment
+- strange_signal
+- escort_or_delivery
+- recovery_job
+- contamination_or_outbreak
+- inheritance_or_document
+- social_scandal
+- official_coverup
+
+Hook selection rules:
+- Choose the hook_type that best preserves the seed's ordinary surface premise.
+- Do not choose a lurid hook_type if the seed begins from a quiet or procedural situation.
+- The hook must create a concrete first step that investigators can take immediately.
+- The hook must not reveal the true hidden threat in plain form.
+- The hook should imply at least 2 plausible wrong explanations.
+
+Per-hook guidance:
+
+mystery_request
+- Someone asks investigators to explain a strange pattern, rumor, contradiction, or recurring anomaly.
+- Early play should center on testimony, records, and scene comparison.
+- Good false leads: superstition, fatigue, bad memory, gossip, local politics.
+
+investigation_request
+- A person, family, authority, employer, or institution hires or pressures investigators to look into a problem.
+- Early play should create tension between official expectations and what is actually happening.
+- Good false leads: bureaucratic failure, sabotage, petty crime, human corruption.
+
+threat_warning
+- Someone believes a danger is coming and asks for help before others take it seriously.
+- Early play should balance credibility versus panic.
+- Good false leads: paranoia, exaggeration, mistaken identity, routine hazard.
+
+unusual_event
+- A single disturbing, impossible, or ill-timed event disrupts an otherwise ordinary setting.
+- Early play should stay close to the immediate aftermath and competing explanations.
+- Good false leads: weather, equipment failure, prank, crowd confusion.
+
+disappearance
+- A person, group, vessel, item, or animal has gone missing under suspicious circumstances.
+- Early play should emphasize timeline reconstruction and conflicting accounts.
+- Good false leads: voluntary flight, accident, affair, theft, ordinary loss.
+
+murder
+- A death or apparent murder begins the case.
+- Early play should preserve ambiguity around cause, motive, and opportunity.
+- Good false leads: human jealousy, inheritance, revenge, drunken violence, local feud.
+
+missing_shipment
+- Something expected to arrive, depart, or be transferred has vanished or been diverted.
+- Early play should foreground logistics, schedules, manifests, and institutional pressure.
+- Good false leads: smuggling, clerical error, union conflict, piracy, weather.
+
+strange_signal
+- A message, signal, code, call, pattern, or transmission behaves as if it has intent or impossible origin.
+- Early play should compare technical explanation against witness testimony.
+- Good false leads: interference, fraud, military testing, atmospheric conditions.
+
+escort_or_delivery
+- Investigators must transport, escort, hand over, or protect something or someone.
+- Early play should begin with the assignment and the first signs that the job's surface purpose is false.
+- Good false leads: theft, interception, contractual betrayal, routine danger.
+
+recovery_job
+- Investigators are asked to retrieve an item, document, person, or device from a site.
+- Early play should focus on why recovery matters and who else may want the target.
+- Good false leads: salvage dispute, ownership conflict, trespass, academic rivalry.
+
+contamination_or_outbreak
+- Something is spreading, spoiling, infecting, or degrading bodies, minds, livestock, supply, or environment.
+- Early play should not immediately confirm whether the cause is medical, industrial, environmental, or Mythos.
+- Good false leads: toxin, disease, mold, food poisoning, industrial waste.
+
+inheritance_or_document
+- A will, map, diary, archive, legal packet, journal, or recovered paper draws investigators in.
+- Early play should present the document as incomplete, misleading, or too easily dismissed.
+- Good false leads: forgery, family lie, delusion, old scandal, bad translation.
+
+social_scandal
+- A rumor, affair, disgrace, or public embarrassment conceals the real disturbance.
+- Early play should make reputation and secrecy matter as much as direct danger.
+- Good false leads: blackmail, adultery, class resentment, political sabotage.
+
+official_coverup
+- Authorities, employers, clergy, police, port service, medical staff, or local elites suppress something.
+- Early play should make the coverup plausible for human reasons before revealing what lies beneath it.
+- Good false leads: corruption only, careerism, panic control, budget concealment.
+
+Hook output requirement:
+Before generating acts, internally determine:
+- hook_type
+- opening_surface_problem
+- first_actionable_lead
+- 2 plausible wrong explanations suggested by the hook

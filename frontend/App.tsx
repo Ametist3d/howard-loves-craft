@@ -203,6 +203,7 @@ function App() {
         scenarioTitle = 'Custom Scenario';
       }
 
+      await apiService.setLlmProvider(config.llmProvider);
       // 2. Generate investigators (pass era so character gen matches setting)
       const promises = config.investigators.map(data => {
         const prompt = `Name: ${data.name}, Job: ${data.occupation}. Background: ${data.background}`;
@@ -217,7 +218,7 @@ function App() {
         scenarioTitle,
         language: config.language
       }));
-      await apiService.setLlmProvider(config.llmProvider);
+   
       // 3. Start session — pass resolved era + seed to backend
       const result = await apiService.startSession(
         generatedInvestigators,

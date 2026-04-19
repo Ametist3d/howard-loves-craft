@@ -1,9 +1,11 @@
 import asyncio
 import json
-import logging
+import uuid
+from pathlib import Path
 
 from langchain_core.prompts import PromptTemplate
 
+# pylint: disable=import-error
 from utils.db_session import SessionDB, create_session_db_file
 from utils.schemas import ChatRequest
 from utils.helpers import (
@@ -11,13 +13,26 @@ from utils.helpers import (
     extract_json,
     extract_last_turn_ban,
     get_chat_history,
-    get_language_name,
     get_llm,
     has_roll_verdict,
-    normalize_language_code,
 )
-from utils.helper_actions import clear_pending_roll, intercept_player_action_for_roll_gate, save_pending_roll
-from utils.helper_story import build_scene_loop_guard, build_scene_prompt, build_stall_forcing_guard, compress_story
+from utils.prompt_translate import (
+    get_language_name,
+    normalize_language_code,
+    translate_opening_result_for_user,
+    translate_keeper_result_for_user,
+)
+from utils.helper_actions import (
+    clear_pending_roll,
+    intercept_player_action_for_roll_gate,
+    save_pending_roll,
+)
+from utils.helper_story import (
+    build_scene_loop_guard,
+    build_scene_prompt,
+    build_stall_forcing_guard,
+    compress_story,
+)
 from utils.helper_state import (
     apply_state_updates,
     assemble_keeper_prompt,
@@ -37,16 +52,125 @@ from utils.engine import (
     rules_db,
     scen_db,
 )
-from utils.engine_session import generate_opening_scene_logic
 from img_gen.comfy_client import BASE_URL as _COMFY_BASE_URL
 
 
-async def handle_chat_logic(req: ChatRequest) -> dict:
-    if req.session_id not in active_dbs:
-        info = create_session_db_file(SESSIONS_DIR, "Fallback Session", "Standard")
-        active_dbs[req.session_id] = SessionDB(info.db_path)
+_REQUEST_BODY_PATH = Path(__file__).resolve().parent.parent / "img_gen" / "request_body.json"
 
-    db = active_dbs[req.session_id]
+
+def _merge_setting_and_era(setting_override: str, era_override: str) -> str:
+    s = str(setting_override or "").strip()
+    e = str(era_override or "").strip()
+
+    if not s:
+        return e
+    if not e:
+        return s
+    if s == e:
+        return s
+
+    # if either side already looks like mixed context, prefer the shorter one
+    if " | " in s and " | " not in e:
+        return e
+    if " | " in e and " | " not in s:
+        return s
+
+    return f"{s} {e}"
+
+
+def _ensure_session_db(session_id: str) -> SessionDB:
+    if session_id not in active_dbs:
+        info = create_session_db_file(SESSIONS_DIR, "Fallback Session", "Standard")
+        active_dbs[session_id] = SessionDB(info.db_path)
+    return active_dbs[session_id]
+
+
+def _get_visual_context(session_id: str) -> tuple[str, str]:
+    visual_history = ""
+    char_visuals = ""
+
+    if session_id in active_dbs:
+        _db = active_dbs[session_id]
+        _cur = _db.conn.cursor()
+
+        _cur.execute("SELECT value FROM kv_store WHERE key='visual_history'")
+        row = _cur.fetchone()
+        visual_history = row["value"] if row else ""
+
+        _cur.execute("SELECT key, value FROM kv_store WHERE key LIKE 'char_visual_%'")
+        rows = _cur.fetchall()
+        if rows:
+            char_visuals = "ESTABLISHED CHARACTERS (maintain consistent appearance):\n"
+            char_visuals += "\n".join(f"- {r['value']}" for r in rows)
+
+    return visual_history, char_visuals
+
+
+async def _generate_image_bg(
+    *,
+    generation_id: str,
+    session_id: str,
+    narrative: str,
+    setting: str,
+    era: str,
+) -> None:
+    try:
+        from img_gen.comfy_client import ComfyClient
+
+        _comfy = ComfyClient(_COMFY_BASE_URL)
+        visual_history, char_visuals = _get_visual_context(session_id)
+
+        scene_prompt = build_scene_prompt(
+            narrative=narrative,
+            era=era,
+            setting=setting,
+            visual_history=visual_history,
+            char_visuals=char_visuals,
+        )
+        logger.info("Image prompt [%s]: %s", generation_id, scene_prompt)
+
+        with open(_REQUEST_BODY_PATH, "r", encoding="utf-8") as f:
+            body = json.load(f)
+
+        body["params"]["prompt"] = scene_prompt
+
+        img_result = _comfy.generate(body)
+        _image_results[generation_id] = img_result["image_url"]
+        logger.info("Image ready [%s]: %s", generation_id, img_result["image_url"])
+
+    except Exception as e:
+        logger.warning("Image generation failed [%s]: %s", generation_id, e)
+        _image_results[generation_id] = None
+
+
+def _attach_image_generation(
+    *,
+    session_id: str,
+    display_result: dict,
+    canonical_narrative: str,
+    setting: str,
+    era: str,
+) -> dict:
+    gen_id = uuid.uuid4().hex
+    _image_results[gen_id] = "pending"
+
+    display_result["generation_id"] = gen_id
+    display_result["image_url"] = None
+
+    asyncio.create_task(
+        _generate_image_bg(
+            generation_id=gen_id,
+            session_id=session_id,
+            narrative=canonical_narrative,
+            setting=setting,
+            era=era,
+        )
+    )
+    return display_result
+
+
+async def handle_chat_logic(req: ChatRequest) -> dict:
+    db = _ensure_session_db(req.session_id)
     intercepted = None
 
     if has_roll_verdict(req.message):
@@ -113,7 +237,12 @@ async def handle_chat_logic(req: ChatRequest) -> dict:
             context_str += "\n\n--- RELEVANT RULEBOOK/SCENARIO LORE ---\n"
             context_str += "\n\n".join([doc.page_content for doc in all_docs])
 
-    llm = get_llm(temperature=req.temperature, num_ctx=req.num_ctx)
+    llm = get_llm(
+        temperature=req.temperature,
+        task="chat_text",
+        num_ctx=req.num_ctx,
+        json_mode=False,
+    )
 
     cur.execute("SELECT value FROM kv_store WHERE key='scenario_setting'")
     row_setting = cur.fetchone()
@@ -161,7 +290,7 @@ async def handle_chat_logic(req: ChatRequest) -> dict:
             + ("\n\n" + stall_guard if stall_guard else "")
             + ("\n\n" + verdict_guard if verdict_guard else "")
         ),
-        "era_context": setting_override + " " + era_override,
+        "era_context": _merge_setting_and_era(setting_override, era_override),
         "history": get_chat_history(db, limit=15),
         "action": req.message,
         "last_turn_ban": extract_last_turn_ban(db),
@@ -198,7 +327,7 @@ async def handle_chat_logic(req: ChatRequest) -> dict:
                 + "\n\n--- CONTRACT REPAIR NOTICE ---\n"
                 + repair_prompt
             ),
-            "era_context": setting_override + " " + era_override,
+            "era_context": _merge_setting_and_era(setting_override, era_override),
             "history": get_chat_history(db, limit=15),
             "action": req.message,
             "last_turn_ban": extract_last_turn_ban(db),
@@ -228,62 +357,21 @@ async def handle_chat_logic(req: ChatRequest) -> dict:
     else:
         clear_pending_roll(db)
 
-    import asyncio, uuid as _uuid
-    from pathlib import Path as _Path
+    display_result = result
+    if is_start_msg:
+        display_result = translate_opening_result_for_user(result, session_language)
+    else: 
+        display_result = translate_keeper_result_for_user(result, session_language)
 
-    _REQUEST_BODY_PATH = _Path(__file__).resolve().parent.parent / "img_gen" / "request_body.json"
-
-    gen_id = _uuid.uuid4().hex
-    _image_results[gen_id] = "pending"
-    result["generation_id"] = gen_id
-    result["image_url"] = None
-
-    async def _generate_image_bg(gid: str, narrative: str, setting: str, era: str):
-        try:
-            from img_gen.comfy_client import ComfyClient
-            _comfy = ComfyClient(_COMFY_BASE_URL)
-
-            visual_history = ""
-            char_visuals = ""
-            if req.session_id in active_dbs:
-                _db = active_dbs[req.session_id]
-                _cur = _db.conn.cursor()
-                _cur.execute("SELECT value FROM kv_store WHERE key='visual_history'")
-                row = _cur.fetchone()
-                visual_history = row["value"] if row else ""
-
-                _cur.execute("SELECT key, value FROM kv_store WHERE key LIKE 'char_visual_%'")
-                rows = _cur.fetchall()
-                if rows:
-                    char_visuals = "ESTABLISHED CHARACTERS (maintain consistent appearance):\n"
-                    char_visuals += "\n".join(f"- {r['value']}" for r in rows)
-
-            scene_prompt = build_scene_prompt(
-                narrative, era=era, setting=setting,
-                visual_history=visual_history,
-                char_visuals=char_visuals
-            )
-            logger.info(f"Image prompt [{gid}]: {scene_prompt}")
-
-            with open(_REQUEST_BODY_PATH, "r", encoding="utf-8") as _f:
-                _body = json.load(_f)
-            _body["params"]["prompt"] = scene_prompt
-
-            img_result = _comfy.generate(_body)
-            _image_results[gid] = img_result["image_url"]
-            logger.info(f"Image ready [{gid}]: {img_result['image_url']}")
-        except Exception as _e:
-            logger.warning(f"Image generation failed [{gid}]: {_e}")
-            _image_results[gid] = None
-
-    asyncio.create_task(_generate_image_bg(
-        gen_id,
-        result.get("narrative", ""),
+    display_result = _attach_image_generation(
+        session_id=req.session_id,
+        display_result=display_result,
+        canonical_narrative=result.get("narrative", ""),
         setting=setting_override,
-        era=era_override
-    ))
+        era=era_override,
+    )
 
-    db.log_event("CHAT", {"role": "Keeper", "content": result.get("narrative", "")})
+    db.log_event("CHAT", {"role": "Keeper", "content": display_result.get("narrative", "")})
 
     cur.execute("SELECT value FROM kv_store WHERE key='turn_count'")
     row_tc = cur.fetchone()
@@ -293,20 +381,14 @@ async def handle_chat_logic(req: ChatRequest) -> dict:
 
     if _should_refresh_digest(turn_count):
         asyncio.create_task(compress_story(db))
-        logger.info(f"Story compression triggered at turn {turn_count}")
+        logger.info("Story compression triggered at turn %s", turn_count)
 
     apply_state_updates(db, result)
-    return result
+    return display_result
 
 
 async def stream_chat_logic(req: ChatRequest):
-    import asyncio, json as _json
-
-    if req.session_id not in active_dbs:
-        info = create_session_db_file(SESSIONS_DIR, "Fallback Session", "Standard")
-        active_dbs[req.session_id] = SessionDB(info.db_path)
-
-    db = active_dbs[req.session_id]
+    db = _ensure_session_db(req.session_id)
     intercepted = None
 
     if has_roll_verdict(req.message):
@@ -322,7 +404,7 @@ async def stream_chat_logic(req: ChatRequest):
     if intercepted is not None:
         db.log_event("CHAT", {"role": "User", "content": req.message})
         db.log_event("CHAT", {"role": "Keeper", "content": intercepted.get("narrative", "")})
-        yield f"data: {_json.dumps({'type': 'done', 'payload': intercepted}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'payload': intercepted}, ensure_ascii=False)}\n\n"
         return
 
     db.log_event("CHAT", {"role": "User", "content": req.message})
@@ -388,7 +470,12 @@ async def stream_chat_logic(req: ChatRequest):
         prompt_dir=prompt_dir,
     )
 
-    llm = get_llm(temperature=req.temperature, num_ctx=req.num_ctx)
+    llm = get_llm(
+        temperature=req.temperature,
+        task="chat_text",
+        num_ctx=req.num_ctx,
+        json_mode=False,
+    )
     chain = PromptTemplate.from_template(keeper_system_prompt) | llm
 
     verdict_guard = build_verdict_guard(req.message)
@@ -412,7 +499,7 @@ async def stream_chat_logic(req: ChatRequest):
             + ("\n\n" + stall_guard if stall_guard else "")
             + ("\n\n" + verdict_guard if verdict_guard else "")
         ),
-        "era_context": setting_override + " " + era_override,
+        "era_context": _merge_setting_and_era(setting_override, era_override),
         "history": get_chat_history(db, limit=15),
         "action": req.message,
         "last_turn_ban": extract_last_turn_ban(db),
@@ -421,7 +508,7 @@ async def stream_chat_logic(req: ChatRequest):
     full_text = ""
     async for chunk in chain.astream(prompt_vars):
         full_text += chunk
-        yield f"data: {_json.dumps({'type': 'token', 'text': chunk}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'token', 'text': chunk}, ensure_ascii=False)}\n\n"
 
     logger.info("stream_chat_logic(): full streamed LLM response preview: %r", full_text[:4000])
 
@@ -455,7 +542,7 @@ async def stream_chat_logic(req: ChatRequest):
                 + "\n\n--- CONTRACT REPAIR NOTICE ---\n"
                 + repair_prompt
             ),
-            "era_context": setting_override + " " + era_override,
+            "era_context": _merge_setting_and_era(setting_override, era_override),
             "history": get_chat_history(db, limit=15),
             "action": req.message,
             "last_turn_ban": extract_last_turn_ban(db),
@@ -485,60 +572,21 @@ async def stream_chat_logic(req: ChatRequest):
     else:
         clear_pending_roll(db)
 
-    from pathlib import Path as _Path
-    import uuid as _uuid
+    display_result = result
+    if is_start_msg:
+        display_result = translate_opening_result_for_user(result, session_language)
+    else:
+        display_result = translate_keeper_result_for_user(result, session_language)
+        
+    display_result = _attach_image_generation(
+        session_id=req.session_id,
+        display_result=display_result,
+        canonical_narrative=result.get("narrative", ""),
+        setting=setting_override,
+        era=era_override,
+    )
 
-    _REQUEST_BODY_PATH = _Path(__file__).resolve().parent.parent / "img_gen" / "request_body.json"
-
-    gen_id = _uuid.uuid4().hex
-    _image_results[gen_id] = "pending"
-    result["generation_id"] = gen_id
-    result["image_url"] = None
-
-    async def _generate_image_bg(gid, narrative, setting, era):
-        try:
-            from img_gen.comfy_client import ComfyClient
-            _comfy = ComfyClient(_COMFY_BASE_URL)
-
-            visual_history, char_visuals = "", ""
-            if req.session_id in active_dbs:
-                _db = active_dbs[req.session_id]
-                _cur = _db.conn.cursor()
-                _cur.execute("SELECT value FROM kv_store WHERE key='visual_history'")
-                r = _cur.fetchone()
-                visual_history = r["value"] if r else ""
-
-                _cur.execute("SELECT key, value FROM kv_store WHERE key LIKE 'char_visual_%'")
-                rows = _cur.fetchall()
-                if rows:
-                    char_visuals = "ESTABLISHED CHARACTERS:\n" + "\n".join(f"- {r['value']}" for r in rows)
-
-            scene_prompt = build_scene_prompt(
-                narrative,
-                era=era,
-                setting=setting,
-                visual_history=visual_history,
-                char_visuals=char_visuals
-            )
-
-            with open(_REQUEST_BODY_PATH, "r", encoding="utf-8") as f:
-                body = _json.load(f)
-            body["params"]["prompt"] = scene_prompt
-
-            img_result = _comfy.generate(body)
-            _image_results[gid] = img_result["image_url"]
-        except Exception as e:
-            logger.warning(f"Image generation failed [{gid}]: {e}")
-            _image_results[gid] = None
-
-    asyncio.create_task(_generate_image_bg(
-        gen_id,
-        result.get("narrative", ""),
-        setting_override,
-        era_override
-    ))
-
-    db.log_event("CHAT", {"role": "Keeper", "content": result.get("narrative", "")})
+    db.log_event("CHAT", {"role": "Keeper", "content": display_result.get("narrative", "")})
 
     cur.execute("SELECT value FROM kv_store WHERE key='turn_count'")
     row = cur.fetchone()
@@ -550,4 +598,5 @@ async def stream_chat_logic(req: ChatRequest):
         asyncio.create_task(compress_story(db))
 
     apply_state_updates(db, result)
-    yield f"data: {_json.dumps({'type': 'done', 'payload': result}, ensure_ascii=False)}\n\n"
+    yield f"data: {json.dumps({'type': 'done', 'payload': display_result}, ensure_ascii=False)}\n\n"
+    

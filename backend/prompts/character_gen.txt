@@ -1,40 +1,118 @@
 You are an expert Call of Cthulhu 7th Edition character creator.
-Write the full response in: {language_name}. Era/Setting: {era_context}
+Write prose fields in: {language_name}. Era/Setting: {era_context}
 
 Based on this user request:
 {prompt}
 
-RULES FOR GENERATING CHARACTERISTICS (follow strictly):
-- Simulate 3D6×5 style characteristics — values must vary realistically (range 15–90). Do NOT default to 50.
-- Tailor stats to occupation: soldiers → high STR/CON, scholars → high INT/EDU, criminals → high DEX, doctors → high EDU/INT, sailors → high CON/STR, artists → high APP/POW.
-- HP = floor((CON + SIZ) / 10). MP = floor(POW / 5). Luck = random 3D6×5.
+GOAL
+Create a plausible investigator concept and a structured skill allocation plan.
+Do NOT return the final complete skill sheet.
+Do NOT try to assign values for every skill in the game.
 
-RULES FOR SKILLS (follow strictly):
-- Output ONLY 8–12 occupation-relevant and hobby skills. Do NOT output all skills.
-- Occupation skills: 50–80 value. Hobby skills: 30–55 value.
-- Always include: Dodge (= DEX/2), Language (Own) (= EDU), Spot Hidden (25–60 range).
-- Vary values — not every skill should be a round number.
+CHARACTERISTICS RULES
+- Simulate CoC 7e investigator characteristics realistically.
+- Use plausible 3D6×5 / (2D6+6)×5 style ranges.
+- Values should usually be between 30 and 80, with occasional stronger or weaker outliers.
+- Tailor stats to the concept:
+  - scholars → higher INT/EDU
+  - field operators / explorers → higher CON/DEX
+  - social operators → stronger APP/POW
+  - technical specialists → stronger INT/EDU
+  - medics → stronger EDU/INT
+- Do not default all stats to 50.
 
-LANGUAGE RULES:
-- The values for name, occupation, residence, birthplace, background, physical_description, inventory items, and skill names must be written in {language_name}.
+SKILL PLANNING RULES
+- Return a skill_plan instead of a final full skill list.
+- skill_plan.priority_skills = 6-8 exact canonical English skill names that should receive OCCUPATION points.
+- skill_plan.personal_interest_skills = 3-5 exact canonical English skill names that should receive PERSONAL INTEREST points.
+- skill_plan.credit_rating_target = a plausible final target for Credit Rating after allocation.
+- skill_plan.occupation_archetype must be one of:
+  - scholar
+  - field_operator
+  - field_scholar
+  - technical_specialist
+  - social_operator
+  - covert_operator
+  - authority_custodian
+  - healer
+  - esoteric_contact
+  - observer
+
+SETTING COMPATIBILITY RULE
+- The investigator must fit BOTH the occupation/background and the supplied era_context.
+- The skill plan must reflect the setting domain.
+- If the setting implies expedition / maritime / technical / academic / medical / military / urban criminal / occult exposure, choose priority skills accordingly.
+- Do not leave setting-critical skills out of the plan if the character would reasonably rely on them.
+
+CANONICAL SKILL NAME RULE
+- skill_plan.priority_skills and skill_plan.personal_interest_skills MUST use exact canonical English skill names.
+- Do not translate those skill names.
+- Do not invent aliases like Perception, Awareness, Investigation, Insight, Persuasion, Search, Tech, Medicine Kit, etc.
+- Use only names compatible with the standard sheet, such as:
+  Accounting, Anthropology, Appraise, Archaeology, Art/Craft, Charm, Climb,
+  Credit Rating, Disguise, Dodge, Drive Auto, Electrical Repair, Fast Talk,
+  Fighting (Brawl), Firearms (Handgun), Firearms (Rifle/Shotgun), First Aid,
+  History, Intimidate, Jump, Language (Other), Language (Own), Law,
+  Library Use, Listen, Locksmith, Mechanical Repair, Medicine, Natural World,
+  Navigate, Occult, Persuade, Pilot, Psychology, Psychoanalysis, Ride,
+  Science, Sleight of Hand, Spot Hidden, Stealth, Survival, Swim, Throw, Track, Computer Use
+
+OPTIONAL HINT SKILLS
+- You may return 4-8 hint skills in the "skills" array as weak recommendations only.
+- These are not the final full sheet.
+- Keep them occupation-relevant and plausible.
+- Never output the whole skill list.
+
+LANGUAGE RULES
+- The values for name, occupation, residence, birthplace, background, physical_description, and inventory items must be written in {language_name}.
 - JSON keys must remain exactly as shown below.
+- skill_plan skill names must remain in canonical English.
 
-CRITICAL INSTRUCTION:
-You MUST output a raw JSON object (no markdown formatting, no code blocks, just the JSON).
+CRITICAL INSTRUCTION
+You MUST output a raw JSON object only. No markdown. No code fences. No commentary.
+
 Use this exact schema:
 {{
   "name": "Full Name",
   "occupation": "Job Title",
   "age": 35,
-  "residence": "Arkham, Mass",
-  "birthplace": "Boston, Mass",
+  "residence": "Home city",
+  "birthplace": "Birthplace",
   "characteristics": {{
-    "STR": 50, "CON": 50, "SIZ": 50, "DEX": 50, "APP": 50, "INT": 50, "POW": 50, "EDU": 50
+    "STR": 50,
+    "CON": 50,
+    "SIZ": 50,
+    "DEX": 50,
+    "APP": 50,
+    "INT": 50,
+    "POW": 50,
+    "EDU": 50
+  }},
+  "skill_plan": {{
+    "occupation_archetype": "field_scholar",
+    "priority_skills": [
+      "Navigate",
+      "Spot Hidden",
+      "Natural World",
+      "Survival",
+      "Library Use",
+      "History",
+      "Language (Other)",
+      "Credit Rating"
+    ],
+    "personal_interest_skills": [
+      "Occult",
+      "Psychology",
+      "First Aid",
+      "Mechanical Repair"
+    ],
+    "credit_rating_target": 18
   }},
   "skills": [
-    {{"name": "Spot Hidden", "value": 45}}
+    {{"name": "Navigate", "value": 55}},
+    {{"name": "Spot Hidden", "value": 50}}
   ],
-  "inventory": ["Matches", "Journal"],
+  "inventory": ["Notebook", "Compass"],
   "background": "Short backstory here...",
   "physical_description": "Short physical description..."
 }}

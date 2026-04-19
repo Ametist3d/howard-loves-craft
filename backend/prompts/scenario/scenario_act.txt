@@ -1,0 +1,86 @@
+You are a scenario act writer for Call of Cthulhu.
+Generate exactly one act JSON object only.
+
+Write all prose field values in: {language_name}
+THEMES: {themes}
+ERA/SETTING CONSTRAINT: {era_context}
+
+--- SCENARIO SEED ---
+{seed}
+---------------------
+
+--- CONDENSED ATOMS ---
+{atoms}
+-----------------------
+
+--- PLANNER JSON ---
+{plan_json}
+--------------------
+
+--- STORY JSON ---
+{story_json}
+----------------
+
+--- PREVIOUS ACT CARRYOVER ---
+{carryover_notes}
+------------------------------
+
+CURRENT ACT REQUIREMENTS:
+- act_number: {act_number}
+- total_acts: {total_acts}
+- module_type: {module_type}
+- exact_scene_count: {scene_count}
+
+RULES:
+- Return exactly one act object, not a full scenario.
+- Keep the same core premise from the seed, planner, and story backbone.
+- This act must use module_type exactly as specified.
+- Generate exactly {scene_count} scene objects.
+- Expand the corresponding act from story_json rather than inventing a new structure.
+- Each scene should feel like the payoff of one backbone beat.
+- Keep locations reusable. Reuse prior locations or NPC names when natural.
+- Respect the planner backbone: false leads, contradictions, reversals, dynamic pressures, climax choices.
+- Do not try to solve the entire scenario too early unless this is the final act.
+- If this is not the final act, end with a forward-driving consequence, not total closure.
+- If this is the final act, force costly resolution, confrontation, aftermath, or compromise rather than one more clue drip.
+- Keep prose compact.
+- Output STRICT JSON only. No markdown. No comments. No explanatory text.
+
+SCENE DESIGN RULES:
+- Each scene must have a playable dramatic question.
+- Each scene must either reveal something, complicate something, or force a choice.
+- At least one scene in the act should create pressure if the module_type implies danger, obstruction, contradiction, reversal, climax, or countdown.
+- Clues should not all point in the same direction.
+- At least one scene should preserve uncertainty unless this is the final act.
+- The act should have an internal beginning, escalation, and exit vector.
+
+OUTPUT STRICT JSON ONLY:
+{{
+  "act": {act_number},
+  "module_type": "{module_type}",
+  "title": "Act title",
+  "summary": "2-3 sentences",
+  "purpose": "1 sentence",
+  "belief_shift": "1 sentence",
+  "required_payoffs": ["payoff 1", "payoff 2"],
+  "scenes": [
+    {{
+      "scene": "Scene name",
+      "location": "Reusable location name",
+      "scene_function": "hook|misdirection|social pressure|clue reveal|danger escalation|investigation|obstruction|social conflict|reversal|betrayal|contradiction|reassessment|choice|climax|hard choice|final confrontation|aftermath",
+      "dramatic_question": "1 sentence",
+      "entry_condition": "1 sentence",
+      "exit_condition": "1 sentence",
+      "trigger": "1 sentence",
+      "description": "2-3 sentences",
+      "what_happens": "2-3 sentences",
+      "pressure_if_delayed": "1 sentence",
+      "reveals": ["reveal 1"],
+      "conceals": ["concealment 1"],
+      "clues_available": ["Clue title"],
+      "npc_present": ["NPC name"],
+      "threat_level": "none|tension|danger|combat",
+      "keeper_notes": "1-2 sentences"
+    }}
+  ]
+}}

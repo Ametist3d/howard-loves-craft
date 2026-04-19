@@ -3,7 +3,10 @@ import logging
 from typing import Dict
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-
+from pathlib import Path
+import datetime
+import json
+#pylint: disable=import-error
 from utils.db_session import SessionDB
 from utils.combat import is_combat_trigger, get_combat_state
 
@@ -14,6 +17,38 @@ _BACKEND_DIR = os.path.dirname(BASE_DIR)
 DATA_DIR = os.path.join(_BACKEND_DIR, "data")
 SESSIONS_DIR = os.path.join(DATA_DIR, "sessions")
 
+
+def _session_trace_path(db_or_path) -> str:
+    if hasattr(db_or_path, "db_path"):
+        db_path = db_or_path.db_path
+    else:
+        db_path = str(db_or_path)
+
+    p = Path(db_path)
+    if p.suffix == ".sqlite":
+        return str(p.with_suffix(".trace.log"))
+    return str(p.parent / f"{p.name}.trace.log")
+
+
+def _trace_session(db_or_path, tag: str, content: str) -> None:
+    try:
+        trace_path = _session_trace_path(db_or_path)
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(trace_path, "a", encoding="utf-8") as f:
+            f.write(f"\n{'=' * 100}\n[{ts}] {tag}\n{'=' * 100}\n{content}\n")
+    except Exception as e:
+        logger.warning("trace write failed for tag=%s: %s", tag, e)
+
+
+def _trace_session_json(db_or_path, tag: str, payload) -> None:
+    try:
+        _trace_session(
+            db_or_path,
+            tag,
+            json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+        )
+    except Exception as e:
+        logger.warning("trace json write failed for tag=%s: %s", tag, e)
 
 def _is_combat_turn(db: SessionDB, message: str) -> bool:
     if is_combat_trigger(message):
@@ -41,21 +76,24 @@ def _derive_initial_objective(blueprint: dict, scenario_atoms_text: str, era_con
             scenes = first_act.get("scenes") or []
             if scenes:
                 scene = scenes[0]
-                trigger = str(scene.get("trigger", "") or "").strip()
-                what_happens = str(scene.get("what_happens", "") or "").strip()
-                location = str(scene.get("location", "") or "").strip()
-                if trigger and location:
-                    return f"Act 1: go to {location} and follow this lead: {trigger}"
+                trigger = str(scene.get("trigger", "") or "").strip().rstrip(".")
+                what_happens = str(scene.get("what_happens", "") or "").strip().rstrip(".")
+                dramatic_question = str(scene.get("dramatic_question", "") or "").strip().rstrip(" ?.")
+
+                if trigger:
+                    return trigger
                 if what_happens:
-                    return f"Act 1: establish what is happening here — {what_happens}"
+                    return what_happens
+                if dramatic_question:
+                    return dramatic_question
 
         for key in ("inciting_hook", "core_mystery"):
             value = str(blueprint.get(key, "") or "").strip()
             if value:
-                return value
+                return value.rstrip(".")
             
     first_line = (scenario_atoms_text or "").splitlines()[0].strip() if scenario_atoms_text else ""
-    return first_line or era_context or "Investigate the immediate situation and identify the first actionable lead."
+    return first_line.rstrip(".") or era_context.rstrip(".") or "Investigate the immediate anomaly and identify the first actionable lead"
 
 
 def _should_refresh_digest(turn_count: int) -> bool:
