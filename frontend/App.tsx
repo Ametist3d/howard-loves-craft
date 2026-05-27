@@ -4,7 +4,6 @@ import { ChatInterface } from './components/ChatInterface';
 import { CharacterSheet } from './components/CharacterSheet';
 import { DiceRoller } from './components/DiceRoller';
 import { SettingsModal } from './components/SettingsModal';
-import { AppSettings } from './types';
 import { GameState, ChatMessage, MessageSender, Language, ChatResponse, PrebuiltScenario, InvestigatorConfig } from './types';
 import { apiService } from './services/apiService';
 import { SCENARIO_SEEDS } from './data/scenarios';
@@ -23,6 +22,34 @@ const INITIAL_STATE: GameState = {
     numCtx: 16384 
   }
 };
+
+const CHARACTERISTIC_TARGETS = new Set(['STR', 'CON', 'SIZ', 'DEX', 'APP', 'INT', 'POW', 'EDU']);
+
+function normalizeRollTarget(raw: string): string {
+  return (raw || '')
+    .replace(/^[\[\(](.*)[\]\)]$/, '$1')
+    .trim();
+}
+
+function formatRollSystemMessage(params: {
+  investigator: string;
+  targetName: string;
+  targetValue: number;
+  roll: number;
+  verdict: string;
+  luckSpent: number;
+}): string {
+  return [
+    '[SYSTEM MESSAGE — ROLL_VERDICT]',
+    `investigator: ${params.investigator}`,
+    `skill: ${params.targetName}`,
+    `target: ${params.targetValue}`,
+    `roll: ${params.roll}`,
+    `outcome: ${params.verdict}`,
+    `luck_spent: ${params.luckSpent}`,
+    '[/SYSTEM MESSAGE]',
+  ].join('\n');
+}
 
 function App() {
   const formatRollOutcomeLabel = (outcome?: string) => {
@@ -293,7 +320,7 @@ function App() {
     setMessages(prev => [...prev, {
       id: msgId,
       sender: MessageSender.KEEPER,
-      content: '',
+      content: '…',
       timestamp: Date.now(),
       imageGenerating: false,
     }]);
@@ -301,13 +328,10 @@ function App() {
     apiService.streamMessage(
       textToSend,
       gameState.settings,
-      // onToken — append each chunk to the message
-      (token: string) => {
-        setMessages(prev => prev.map(m =>
-          m.id === msgId ? { ...m, content: m.content + token } : m
-        ));
-      },
-      // onDone — swap raw streamed text for clean parsed narrative, apply state
+      // onToken — intentionally ignored. Backend may use internal canonical English,
+      // so the UI only displays the final translated payload from the `done` event.
+      (_token: string) => {},
+      // onDone — show clean translated narrative and apply state
       async (result) => {
         setIsLoading(false);
         // Replace streamed raw JSON with the clean parsed narrative
@@ -363,18 +387,10 @@ function App() {
   }, []);
 
   const handleDigitalRoll = async (result: number, type: string) => {
+    // Generic dice rolls are local UI events. Do not send them to the Keeper LLM
+    // unless they are submitted as a confirmed skill/stat roll via handleManualRoll().
     setSuggestedActions([]);
     addMessage(MessageSender.SYSTEM, `🎲 ${type}: ${result}`);
-    setIsLoading(true);
-    try {
-      const msg = `[SYSTEM] The investigator rolled a digital ${type}. Result: ${result}.`;
-      const response = await apiService.sendMessage(msg, gameState.settings);
-      await processAiResponse(response);
-    } catch (error) {
-      addMessage(MessageSender.SYSTEM, "Connection error.");
-    } finally {
-      setIsLoading(false);
-    }
   };
 
   const handleManualRoll = async (name: string, result: number, skillName?: string, skillValue?: number, luckSpent: number = 0) => {
@@ -385,35 +401,28 @@ function App() {
 
     if (skillName && skillValue !== undefined) {
       let verdict = "FAILURE";
-      if (result === 1)                                        verdict = "CRITICAL SUCCESS";
-      else if (result === 100 || (skillValue < 50 && result >= 96)) verdict = "FUMBLE (CRITICAL FAILURE)";
-      else if (result <= Math.floor(skillValue / 5))           verdict = "EXTREME SUCCESS";
-      else if (result <= Math.floor(skillValue / 2))           verdict = "HARD SUCCESS";
-      else if (result <= skillValue)                           verdict = "REGULAR SUCCESS";
+      if (result === 1)                                             verdict = "CRITICAL SUCCESS";
+      else if (result === 100 || (skillValue < 50 && result >= 96)) verdict = "FUMBLE";
+      else if (result <= Math.floor(skillValue / 5))                verdict = "EXTREME SUCCESS";
+      else if (result <= Math.floor(skillValue / 2))                verdict = "HARD SUCCESS";
+      else if (result <= skillValue)                                verdict = "REGULAR SUCCESS";
 
-      const lastKeeperMsg = [...messages].reverse().find(m => m.sender === MessageSender.KEEPER);
-      const actionContext = pendingRolledAction
-        ? `\n\nPLAYER DECLARED ACTION BEING RESOLVED:\n"${pendingRolledAction}"`
-        : '';
-
-      const pendingContext = lastKeeperMsg
-        ? `\n\nSCENE CONTEXT:\n"${lastKeeperMsg.content.slice(0, 400)}"${actionContext}`
-        : actionContext;
-
-      msgToBackend = `[SYSTEM MESSAGE — DICE RESULT — READ THIS FIRST]:
-▶ Investigator: ${name}
-▶ Skill checked: ${skillName} (target value: ${skillValue})
-▶ Dice roll: ${result}
-▶ VERDICT: *** ${verdict} ***
-▶ Luck spent: ${luckSpent}
-${pendingContext}
-
-CRITICAL INSTRUCTION FOR KEEPER: This roll resolves the action described in SCENE CONTEXT above.
-Narrate ONLY the direct outcome of THIS roll as a ${verdict} — 1 to 3 sentences.
-DO NOT invent a new scene or location. DO NOT repeat prior atmosphere or description.
-Continue from exactly where the scene context left off.`;
+      // Compact machine-readable verdict only. The backend already has pending_roll_json,
+      // so we do not send translated scene prose back into the canonical-English Keeper prompt.
+      msgToBackend = formatRollSystemMessage({
+        investigator: name,
+        targetName: skillName,
+        targetValue: skillValue,
+        roll: result,
+        verdict,
+        luckSpent,
+      });
     } else {
-      msgToBackend = `[SYSTEM MESSAGE]: Investigator ${name} performed a raw dice roll. Result: ${result}.`;
+      // Raw/free dice rolls are displayed locally and do not need a Keeper call.
+      addMessage(MessageSender.SYSTEM, textToDisplay);
+      setPendingRolledAction(null);
+      setAutoSkill(null);
+      return;
     }
 
     addMessage(MessageSender.SYSTEM, textToDisplay);
@@ -442,17 +451,32 @@ Continue from exactly where the scene context left off.`;
   const lastKeeperMsgId = lastKeeperMsg?.id;
   React.useEffect(() => { setAutoSkill(null); }, [lastKeeperMsgId]);
 
-  // Helper: given a skill name string from the LLM, find best investigator + matched skill
-  const resolveSkillTarget = (rawSkill: string): { investigatorName: string; skillName: string } | null => {
-    if (!rawSkill || gameState.investigators.length === 0) return null;
-    const search = rawSkill.toLowerCase().trim();
+  // Helper: given a skill/stat target from the backend, find best investigator + target.
+  // Supports both normal skills and characteristic rolls: STR/CON/SIZ/DEX/APP/INT/POW/EDU.
+  const resolveSkillTarget = (rawTarget: string): { investigatorName: string; skillName: string } | null => {
+    const target = normalizeRollTarget(rawTarget);
+    if (!target || gameState.investigators.length === 0) return null;
+
+    const upper = target.toUpperCase();
+    if (CHARACTERISTIC_TARGETS.has(upper)) {
+      let best: { investigatorName: string; value: number } | null = null;
+      for (const inv of gameState.investigators) {
+        const chars = (inv as any).characteristics || {};
+        const value = Number(chars[upper] ?? 0);
+        if (!best || value > best.value) {
+          best = { investigatorName: inv.name, value };
+        }
+      }
+      return best ? { investigatorName: best.investigatorName, skillName: upper } : null;
+    }
+
+    const search = target.toLowerCase().trim();
     let best: { investigatorName: string; skillName: string; value: number } | null = null;
     for (const inv of gameState.investigators) {
-      const match = inv.skills.find(s =>
-        s.name.toLowerCase() === search ||
-        s.name.toLowerCase().includes(search) ||
-        search.includes(s.name.toLowerCase())
-      );
+      const match = inv.skills.find(s => {
+        const name = s.name.toLowerCase();
+        return name === search || name.includes(search) || search.includes(name);
+      });
       if (match && (!best || match.value > best.value)) {
         best = { investigatorName: inv.name, skillName: match.name, value: match.value };
       }
@@ -540,9 +564,7 @@ Continue from exactly where the scene context left off.`;
                       // Check if this action requires a roll
                       const rollMatch = action.match(/→\s*Roll\s+(.+?)\s*$/i);
                       if (rollMatch) {
-                        let skillRaw = rollMatch[1].trim();
-                        // remove wrapping [ ] or ( )
-                        skillRaw = skillRaw.replace(/^[\[\(](.*)[\]\)]$/, '$1').trim();
+                        let skillRaw = normalizeRollTarget(rollMatch[1]);
                         const resolved = resolveSkillTarget(skillRaw);
                         if (resolved) {
                           const actionText = action.replace(/→\s*Roll\s+.+$/i, '').trim();
@@ -553,7 +575,7 @@ Continue from exactly where the scene context left off.`;
 
                           addMessage(
                             MessageSender.SYSTEM,
-                            `🎯 Skill check complete: ${resolved.investigatorName} — ${resolved.skillName}. Roll d100 and click CONFIRM.`
+                            `🎯 Skill check ready: ${resolved.investigatorName} — ${resolved.skillName}. Roll d100 and click CONFIRM.`
                           );
                           return;
                         }

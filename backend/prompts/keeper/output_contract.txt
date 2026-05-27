@@ -4,11 +4,11 @@ Return exactly this structure and nothing else:
 
 <SYSTEM_RESPONSE_JSON>
 {{
-  "narrative": "Atmospheric prose here. No literal newlines.",
+  "narrative": "Canonical English Keeper prose here. No literal newlines.",
   "suggested_actions": [
-    "Action 1",
-    "Action 2",
-    "Action 3"
+    "Canonical English action 1",
+    "Canonical English action 2",
+    "Canonical English action 3"
   ],
   "state_updates": {{
     "character_name": "",
@@ -23,15 +23,15 @@ Return exactly this structure and nothing else:
     "clue_content": "",
     "thread_progress": ""
   }},
-  "combat_update": {{
-    "combat_started": false,
-    "combat_ended": false,
-    "attacker_name": "",
+  "combat_action": {{
+    "start_combat": false,
+    "end_combat": false,
+    "actor_name": "",
     "target_name": "",
-    "attack_mode": "",
+    "action_type": "",
+    "skill_name": "",
     "weapon_name": "",
     "weapon_damage": "",
-    "skill_name": "",
     "defender_option": "",
     "shots_fired": 0,
     "bonus_dice": 0,
@@ -42,6 +42,9 @@ Return exactly this structure and nothing else:
     "skill_name": "",
     "action_text": "",
     "reason": ""
+  }},
+  "scene_entities": {{
+    "present_named_entities": []
   }}
 }}
 </SYSTEM_RESPONSE_JSON>
@@ -50,52 +53,54 @@ Rules:
 - No markdown.
 - No commentary before or after the tags.
 - JSON keys must remain in English.
-- "narrative" and "suggested_actions" values must be in the selected session language.
-- Integers only.
+- All string values must be canonical English.
+- Do not use the user's display language in this internal response.
+- User-facing translation happens after parsing.
+- Integers only for numeric fields.
 - Never use dice notation inside state_updates numeric values.
 - weapon_damage may use dice notation like 1D3, 1D4, 1D6, 1D8, 1D10, 2D6+4, 4D6.
-- If the narrative introduces a new distinct place that the investigators actually enter or clearly arrive in, fill location_name.
-- If the narrative reveals a concrete, player-usable fact or evidence, fill clue_found and clue_content.
-- If the narrative clearly advances an existing investigation line, fill thread_progress.
 - Leave fields empty when nothing actually changed in state.
+
+STATE UPDATE ENFORCEMENT
+- Use state_updates only for established changes, not mere possibilities.
+- Do not set clue_found merely because an object, journal, letter, diary, mirror, artifact, map, or lead is visible, named, suggested, or available to inspect.
+- Set clue_found when investigators actually learn, confirm, decode, or otherwise gain meaningful player-usable content from that source.
+- Do not set location_name merely because a place is mentioned, proposed, glimpsed, or discussed.
+- Set location_name when investigators materially enter, reach, or clearly arrive there.
+- If the response identifies the source of a lead, confirms a fact, unlocks a new route, or changes the active objective in a player-usable way, reflect that in state_updates.
+- If the response materially advances an existing line of inquiry but does not cleanly map to a named clue title, fill thread_progress with a short factual phrase.
 
 THREAD_PROGRESS FORMAT RULE
 - thread_progress must be a short factual phrase describing what investigation line advanced.
-- Do not express thread_progress as numeric fractions such as 1/4, 2/4, 3/4, etc.
+- Do not express thread_progress as fractions, percentages, or score-like counters.
 - Do not use thread_progress as a scoreboard, tracker bar, or progress meter.
-- Good examples:
-  - "The anomalous isotope report is confirmed as genuine."
-  - "The generator maintenance log becomes the new lead."
-  - "The missing scientist is linked to the sealed sub-ice tunnel."
-- Bad examples:
-  - "Investigation progress 1/4"
-  - "Anomaly thread: 2/4"
-  - "Main mystery 50% complete"
-  
-STATE UPDATE ENFORCEMENT
-- Use state_updates only for established changes, not for mere possibilities.
-- Do not set clue_found merely because an object, journal, letter, diary, mirror, artifact, or lead is visible, named, suggested, or available to inspect.
-- Set clue_found when the investigators actually learn, confirm, decode, or otherwise gain meaningful content from that source.
-- Do not set location_name merely because a place is mentioned, proposed, glimpsed, or discussed.
-- Set location_name when the investigators materially enter, reach, or clearly arrive at that place.
-- If the response identifies the source of a lead, confirms a fact, or changes the active objective in a player-usable way, reflect that in state_updates.
 
-COMBAT PAYLOAD RULES:
-- Use combat_update only when violence, attack, armed threat, or an active combat exchange is occurring.
-- attack_mode must be one of: "", "melee", "firearm", "maneuver", "other".
-- attacker_name and target_name must name actors that already exist in CURRENT GAME STATE.
-- Do not invent new enemies for combat_update. Use only actors from CURRENT GAME STATE.
-- skill_name must be the exact existing skill name from the attacker’s sheet when possible.
-- defender_option must be one of: "", "fight_back", "dodge", "dive_for_cover".
-- Do not narrate final kill/destruction as automatic intent fulfillment. The backend resolves the mechanics.
-- combat_started should become true when the first real attack or active hostile exchange begins.
-- combat_ended should become true only when the fight is clearly over.
+COMBAT PAYLOAD RULES
+- Use combat_action only when violence, attack, armed threat, or an active combat exchange is occurring.
+- action_type must be one of: "", attack_melee, attack_firearm, maneuver, move, flee, draw_weapon, ready_firearm, assist, delay, use_item, cast, dive_for_cover, other.
+- actor_name and target_name must name actors that already exist in CURRENT GAME STATE.
+- Do not invent new enemies for combat_action. Use only actors already present in CURRENT GAME STATE.
+- skill_name must be the exact existing skill name from the actor's sheet when possible.
+- defender_option must be one of: "", fight_back, dodge, dive_for_cover.
+- Do not narrate final kill/destruction as automatic intent fulfillment. The backend resolves mechanics.
+- start_combat becomes true when the first real hostile exchange begins.
+- end_combat becomes true only when the fight is clearly over.
 
-ROLL REQUEST RULES:
-- Use roll_request when the player action is challenging and requires a roll before its outcome can be narrated.
+ACTIVE COMBAT LOCK
+- If CURRENT COMBAT STATE says combat is active, do not switch back into ordinary investigation flow.
+- During active combat, every response must either provide a combat_action payload or provide roll_request for the current combat action if a roll is needed before outcome narration.
+- Do not use active combat turns for routine searching, free questioning, atmospheric wandering, or side investigation unless the player explicitly uses their combat turn for that and you encode it as combat_action.action_type="other" or "use_item".
+
+ROLL REQUEST RULES
+- Use roll_request only when the current action is challenging and requires a roll before its outcome can be narrated.
 - roll_request.required must be true only when a roll is actually needed now.
 - skill_name must be the exact existing skill or attribute name from CURRENT GAME STATE.
-- action_text should restate the gated action in a short plain form.
+- action_text should restate the gated action in short plain English.
 - reason should briefly explain why the roll is needed.
-- When roll_request.required is true, do not narrate the successful completion of that action yet.
-- If no roll is needed, set required=false and leave the other roll_request fields empty.
+- When roll_request.required is true, do not narrate successful completion of that action yet.
+- If no roll is needed, set required=false and leave other roll_request fields empty.
+
+SCENE ENTITY RULE
+- If a named person, creature, or being becomes visibly present in the scene for the first time, include that exact canonical name in scene_entities.present_named_entities.
+- Use canonical internal names only.
+- Do not include investigators unless the database state already established they are separately present, missing, split off, captured, duplicated, or impersonated.

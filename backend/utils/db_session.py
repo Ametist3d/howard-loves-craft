@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 
 def _utc_now_iso() -> str:
@@ -128,6 +128,19 @@ class SessionDB:
         """)
 
         cur.execute("""
+        CREATE TABLE IF NOT EXISTS actor_items (
+        id TEXT PRIMARY KEY,
+        actor_id TEXT NOT NULL,
+        item_name TEXT NOT NULL,
+        quantity INTEGER NOT NULL DEFAULT 1,
+        item_type TEXT,
+        item_data_json TEXT,
+        updated_at TEXT,
+        FOREIGN KEY(actor_id) REFERENCES actors(id) ON DELETE CASCADE
+        );
+        """)
+
+        cur.execute("""
         CREATE TABLE IF NOT EXISTS clues (
           id TEXT PRIMARY KEY,
           title TEXT,
@@ -174,6 +187,89 @@ class SessionDB:
         );
         """)
 
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS story_acts (
+        id TEXT PRIMARY KEY,
+        act_no INTEGER NOT NULL,
+        title TEXT,
+        summary TEXT,
+        purpose TEXT,
+        belief_shift TEXT,
+        required_payoffs_json TEXT,
+        module_type TEXT,
+        payload_json TEXT,
+        updated_at TEXT
+        );
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS story_scenes (
+        id TEXT PRIMARY KEY,
+        act_id TEXT NOT NULL,
+        act_no INTEGER NOT NULL,
+        scene_no INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        location_id TEXT,
+        scene_function TEXT,
+        dramatic_question TEXT,
+        entry_condition TEXT,
+        exit_condition TEXT,
+        trigger_text TEXT,
+        description TEXT,
+        what_happens TEXT,
+        pressure_if_delayed TEXT,
+        threat_level TEXT,
+        reveals_json TEXT,
+        conceals_json TEXT,
+        payload_json TEXT,
+        unlocked INTEGER NOT NULL DEFAULT 0,
+        resolved INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT,
+        FOREIGN KEY(act_id) REFERENCES story_acts(id),
+        FOREIGN KEY(location_id) REFERENCES locations(id)
+        );
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS story_scene_npcs (
+        scene_id TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        PRIMARY KEY(scene_id, actor_id),
+        FOREIGN KEY(scene_id) REFERENCES story_scenes(id) ON DELETE CASCADE,
+        FOREIGN KEY(actor_id) REFERENCES actors(id) ON DELETE CASCADE
+        );
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS story_scene_clues (
+        scene_id TEXT NOT NULL,
+        clue_id TEXT NOT NULL,
+        PRIMARY KEY(scene_id, clue_id),
+        FOREIGN KEY(scene_id) REFERENCES story_scenes(id) ON DELETE CASCADE,
+        FOREIGN KEY(clue_id) REFERENCES clues(id) ON DELETE CASCADE
+        );
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS story_scene_threads (
+        scene_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        PRIMARY KEY(scene_id, thread_id),
+        FOREIGN KEY(scene_id) REFERENCES story_scenes(id) ON DELETE CASCADE,
+        FOREIGN KEY(thread_id) REFERENCES threads(id) ON DELETE CASCADE
+        );
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS story_scene_objectives (
+        id TEXT PRIMARY KEY,
+        scene_id TEXT NOT NULL,
+        objective_type TEXT NOT NULL,   -- trigger | dramatic_question | exit_condition | custom
+        text TEXT NOT NULL,
+        FOREIGN KEY(scene_id) REFERENCES story_scenes(id) ON DELETE CASCADE
+        );
+        """)
+
         # Versioning
         cur.execute("SELECT v FROM meta WHERE k='schema_version';")
         row = cur.fetchone()
@@ -181,9 +277,498 @@ class SessionDB:
             cur.execute("INSERT INTO meta(k,v) VALUES('schema_version','2');")
         self.conn.commit()
 
+
+    # ----------------------------
+    # Story graph helpers
+    # ----------------------------
+
+    def _story_scene_row_to_dict(self, row) -> Optional[Dict[str, Any]]:
+        if not row:
+            return None
+        d = dict(row)
+        d["payload"] = _json_loads(d.pop("payload_json", None)) or {}
+        d["reveals"] = _json_loads(d.pop("reveals_json", None)) or []
+        d["conceals"] = _json_loads(d.pop("conceals_json", None)) or []
+        return d
+
+    def clear_story_graph(self) -> None:
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM story_scene_objectives")
+        cur.execute("DELETE FROM story_scene_npcs")
+        cur.execute("DELETE FROM story_scene_clues")
+        cur.execute("DELETE FROM story_scene_threads")
+        cur.execute("DELETE FROM story_scenes")
+        cur.execute("DELETE FROM story_acts")
+        cur.execute("DELETE FROM kv_store WHERE key IN ('current_story_scene_id','current_act','current_scene','current_scene_location','current_objective')")
+        self.conn.commit()
+
+    def upsert_story_act(
+        self,
+        *,
+        act_no: int,
+        title: str,
+        summary: str = "",
+        purpose: str = "",
+        belief_shift: str = "",
+        required_payoffs: list[str] | None = None,
+        module_type: str = "",
+        payload: dict | None = None,
+        act_id: str | None = None,
+    ) -> str:
+        cur = self.conn.cursor()
+        now = _utc_now_iso()
+        payload_json = _json_dumps(payload or {})
+        required_payoffs_json = _json_dumps(required_payoffs or [])
+
+        target_id = act_id
+        if target_id:
+            cur.execute("SELECT id FROM story_acts WHERE id=?", (target_id,))
+            row = cur.fetchone()
+        else:
+            cur.execute("SELECT id FROM story_acts WHERE act_no=?", (int(act_no),))
+            row = cur.fetchone()
+            target_id = row["id"] if row else uuid.uuid4().hex
+
+        if row:
+            cur.execute(
+                """
+                UPDATE story_acts
+                SET act_no=?, title=?, summary=?, purpose=?, belief_shift=?,
+                    required_payoffs_json=?, module_type=?, payload_json=?, updated_at=?
+                WHERE id=?
+                """,
+                (
+                    int(act_no), title, summary, purpose, belief_shift,
+                    required_payoffs_json, module_type, payload_json, now, target_id
+                ),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO story_acts(
+                    id, act_no, title, summary, purpose, belief_shift,
+                    required_payoffs_json, module_type, payload_json, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    target_id, int(act_no), title, summary, purpose, belief_shift,
+                    required_payoffs_json, module_type, payload_json, now
+                ),
+            )
+        self.conn.commit()
+        return target_id
+
+    def upsert_story_scene(
+        self,
+        *,
+        act_id: str,
+        act_no: int,
+        scene_no: int,
+        name: str,
+        location_id: str | None = None,
+        payload: dict | None = None,
+    ) -> str:
+        cur = self.conn.cursor()
+        now = _utc_now_iso()
+        payload = payload or {}
+
+        scene_function = str(payload.get("scene_function", "") or "")
+        dramatic_question = str(payload.get("dramatic_question", "") or "")
+        entry_condition = str(payload.get("entry_condition", "") or "")
+        exit_condition = str(payload.get("exit_condition", "") or "")
+        trigger_text = str(payload.get("trigger", "") or "")
+        description = str(payload.get("description", "") or "")
+        what_happens = str(payload.get("what_happens", "") or "")
+        pressure_if_delayed = str(payload.get("pressure_if_delayed", "") or "")
+        threat_level = str(payload.get("threat_level", "") or "")
+        reveals_json = _json_dumps(payload.get("reveals") or [])
+        conceals_json = _json_dumps(payload.get("conceals") or [])
+        payload_json = _json_dumps(payload)
+
+        cur.execute(
+            "SELECT id FROM story_scenes WHERE act_id=? AND scene_no=?",
+            (act_id, int(scene_no)),
+        )
+        row = cur.fetchone()
+        scene_id = row["id"] if row else uuid.uuid4().hex
+
+        if row:
+            cur.execute(
+                """
+                UPDATE story_scenes
+                SET act_no=?, scene_no=?, name=?, location_id=?, scene_function=?,
+                    dramatic_question=?, entry_condition=?, exit_condition=?, trigger_text=?,
+                    description=?, what_happens=?, pressure_if_delayed=?, threat_level=?,
+                    reveals_json=?, conceals_json=?, payload_json=?, updated_at=?
+                WHERE id=?
+                """,
+                (
+                    int(act_no), int(scene_no), name, location_id, scene_function,
+                    dramatic_question, entry_condition, exit_condition, trigger_text,
+                    description, what_happens, pressure_if_delayed, threat_level,
+                    reveals_json, conceals_json, payload_json, now, scene_id
+                ),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO story_scenes(
+                    id, act_id, act_no, scene_no, name, location_id,
+                    scene_function, dramatic_question, entry_condition, exit_condition,
+                    trigger_text, description, what_happens, pressure_if_delayed,
+                    threat_level, reveals_json, conceals_json, payload_json,
+                    unlocked, resolved, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    scene_id, act_id, int(act_no), int(scene_no), name, location_id,
+                    scene_function, dramatic_question, entry_condition, exit_condition,
+                    trigger_text, description, what_happens, pressure_if_delayed,
+                    threat_level, reveals_json, conceals_json, payload_json,
+                    1 if int(act_no) == 1 and int(scene_no) == 1 else 0,
+                    0,
+                    now,
+                ),
+            )
+        self.conn.commit()
+        return scene_id
+
+    def link_story_scene_npc(self, scene_id: str, actor_id: str) -> None:
+        self.conn.execute(
+            """
+            INSERT OR IGNORE INTO story_scene_npcs(scene_id, actor_id)
+            VALUES(?, ?)
+            """,
+            (scene_id, actor_id),
+        )
+        self.conn.commit()
+
+    def link_story_scene_clue(self, scene_id: str, clue_id: str) -> None:
+        self.conn.execute(
+            """
+            INSERT OR IGNORE INTO story_scene_clues(scene_id, clue_id)
+            VALUES(?, ?)
+            """,
+            (scene_id, clue_id),
+        )
+        self.conn.commit()
+
+    def link_story_scene_thread(self, scene_id: str, thread_id: str) -> None:
+        self.conn.execute(
+            """
+            INSERT OR IGNORE INTO story_scene_threads(scene_id, thread_id)
+            VALUES(?, ?)
+            """,
+            (scene_id, thread_id),
+        )
+        self.conn.commit()
+
+    def add_story_scene_objective(self, scene_id: str, objective_type: str, text: str) -> str:
+        oid = uuid.uuid4().hex
+        self.conn.execute(
+            """
+            INSERT INTO story_scene_objectives(id, scene_id, objective_type, text)
+            VALUES(?,?,?,?)
+            """,
+            (oid, scene_id, objective_type, text),
+        )
+        self.conn.commit()
+        return oid
+
+    def set_current_story_scene(self, scene_id: str) -> None:
+        """
+        Set the authoritative story-scene pointer and mirror legacy kv keys.
+
+        Newer runtime code should prefer get_current_story_scene(), but several
+        prompt/context helpers still read current_act/current_scene/current_objective.
+        Keeping them synchronized prevents opening/chat prompts from seeing empty
+        or stale progression labels.
+        """
+        scene_id = str(scene_id or "").strip()
+        if not scene_id:
+            return
+
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO kv_store(key, value) VALUES(?, ?)",
+            ("current_story_scene_id", scene_id),
+        )
+
+        cur.execute(
+            """
+            SELECT s.act_no, s.name, l.name AS location_name
+            FROM story_scenes s
+            LEFT JOIN locations l ON l.id = s.location_id
+            WHERE s.id=?
+            """,
+            (scene_id,),
+        )
+        row = cur.fetchone()
+        if row:
+            kv_pairs = {
+                "current_act": str(row["act_no"] or "1"),
+                "current_scene": str(row["name"] or ""),
+                "current_scene_location": str(row["location_name"] or ""),
+            }
+
+            cur.execute(
+                """
+                SELECT text
+                FROM story_scene_objectives
+                WHERE scene_id=?
+                ORDER BY
+                  CASE objective_type
+                    WHEN 'trigger' THEN 1
+                    WHEN 'exit_condition' THEN 2
+                    WHEN 'custom' THEN 3
+                    WHEN 'dramatic_question' THEN 4
+                    ELSE 5
+                  END,
+                  rowid
+                LIMIT 1
+                """,
+                (scene_id,),
+            )
+            obj = cur.fetchone()
+            if obj and str(obj["text"] or "").strip():
+                kv_pairs["current_objective"] = str(obj["text"] or "").strip()
+
+            for key, value in kv_pairs.items():
+                cur.execute(
+                    "INSERT OR REPLACE INTO kv_store(key, value) VALUES(?, ?)",
+                    (key, value),
+                )
+
+        self.conn.commit()
+
+    def get_current_story_scene(self) -> dict | None:
+        cur = self.conn.cursor()
+        cur.execute("SELECT value FROM kv_store WHERE key='current_story_scene_id'")
+        row = cur.fetchone()
+        scene_id = row["value"] if row else ""
+
+        if scene_id:
+            cur.execute(
+                """
+                SELECT s.*, l.name AS location_name, l.description AS location_description
+                FROM story_scenes s
+                LEFT JOIN locations l ON l.id = s.location_id
+                WHERE s.id=?
+                """,
+                (scene_id,),
+            )
+            found = cur.fetchone()
+            if found:
+                return self._story_scene_row_to_dict(found)
+
+        cur.execute(
+            """
+            SELECT s.*, l.name AS location_name, l.description AS location_description
+            FROM story_scenes s
+            LEFT JOIN locations l ON l.id = s.location_id
+            ORDER BY s.act_no, s.scene_no
+            LIMIT 1
+            """
+        )
+        first = cur.fetchone()
+        if first:
+            first_dict = self._story_scene_row_to_dict(first)
+            self.set_current_story_scene(first_dict["id"])
+            return first_dict
+        return None
+
+    def get_next_story_scene(self, scene_id: str) -> dict | None:
+        cur = self.conn.cursor()
+        cur.execute("SELECT act_no, scene_no FROM story_scenes WHERE id=?", (scene_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+
+        act_no = int(row["act_no"])
+        scene_no = int(row["scene_no"])
+
+        cur.execute(
+            """
+            SELECT s.*, l.name AS location_name, l.description AS location_description
+            FROM story_scenes s
+            LEFT JOIN locations l ON l.id = s.location_id
+            WHERE (s.act_no > ?)
+               OR (s.act_no = ? AND s.scene_no > ?)
+            ORDER BY s.act_no, s.scene_no
+            LIMIT 1
+            """,
+            (act_no, act_no, scene_no),
+        )
+        nxt = cur.fetchone()
+        return self._story_scene_row_to_dict(nxt)
+
+    def mark_story_scene_resolved(self, scene_id: str) -> None:
+        self.conn.execute(
+            "UPDATE story_scenes SET resolved=1, updated_at=? WHERE id=?",
+            (_utc_now_iso(), scene_id),
+        )
+        self.conn.commit()
+
+    def get_story_scene_primary_objective(self, scene_id: str) -> str:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT text
+            FROM story_scene_objectives
+            WHERE scene_id=?
+            ORDER BY
+              CASE objective_type
+                WHEN 'trigger' THEN 1
+                WHEN 'exit_condition' THEN 2
+                WHEN 'custom' THEN 3
+                WHEN 'dramatic_question' THEN 4
+                ELSE 5
+              END,
+              rowid
+            LIMIT 1
+            """,
+            (scene_id,),
+        )
+        row = cur.fetchone()
+        return str(row["text"] or "").strip() if row else ""
+
+    def list_story_scene_npcs(self, scene_id: str) -> list[dict]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT a.*
+            FROM story_scene_npcs sn
+            JOIN actors a ON a.id = sn.actor_id
+            WHERE sn.scene_id=?
+            ORDER BY a.name
+            """,
+            (scene_id,),
+        )
+        rows = cur.fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["skills"] = self.get_actor_skills(d["id"])
+            d["inventory"] = self.list_actor_items(d["id"])
+            out.append(d)
+        return out
+
+    def list_story_scene_clues(self, scene_id: str, *, include_hidden: bool = True) -> list[dict]:
+        cur = self.conn.cursor()
+        if include_hidden:
+            cur.execute(
+                """
+                SELECT c.*
+                FROM story_scene_clues sc
+                JOIN clues c ON c.id = sc.clue_id
+                WHERE sc.scene_id=?
+                ORDER BY c.title
+                """,
+                (scene_id,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT c.*
+                FROM story_scene_clues sc
+                JOIN clues c ON c.id = sc.clue_id
+                WHERE sc.scene_id=? AND c.status <> 'hidden'
+                ORDER BY c.title
+                """,
+                (scene_id,),
+            )
+        rows = cur.fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["text"] = d["content"]
+            out.append(d)
+        return out
+
+    def list_story_scene_threads(self, scene_id: str) -> list[dict]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT t.*
+            FROM story_scene_threads st
+            JOIN threads t ON t.id = st.thread_id
+            WHERE st.scene_id=?
+            ORDER BY t.updated_at DESC, t.name
+            """,
+            (scene_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
     # ----------------------------
     # Session lifecycle
     # ----------------------------
+
+    def list_actor_items(self, actor_id: str) -> List[Dict[str, Any]]:
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT * FROM actor_items WHERE actor_id=? ORDER BY item_name",
+            (actor_id,),
+        )
+        rows = cur.fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["item_data"] = _json_loads(d.pop("item_data_json", None)) or {}
+            out.append(d)
+        return out
+
+
+    def add_actor_item(
+        self,
+        actor_id: str,
+        item_name: str,
+        *,
+        quantity: int = 1,
+        item_type: str = "",
+        item_data: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT id, quantity FROM actor_items WHERE actor_id=? AND LOWER(item_name)=LOWER(?)",
+            (actor_id, item_name),
+        )
+        row = cur.fetchone()
+        now = _utc_now_iso()
+
+        if row:
+            new_qty = int(row["quantity"]) + max(1, int(quantity))
+            cur.execute(
+                "UPDATE actor_items SET quantity=?, item_type=?, item_data_json=?, updated_at=? WHERE id=?",
+                (new_qty, item_type, _json_dumps(item_data or {}), now, row["id"]),
+            )
+            self.conn.commit()
+            return row["id"]
+
+        iid = uuid.uuid4().hex
+        cur.execute(
+            """INSERT INTO actor_items(id, actor_id, item_name, quantity, item_type, item_data_json, updated_at)
+            VALUES(?,?,?,?,?,?,?)""",
+            (iid, actor_id, item_name, max(1, int(quantity)), item_type, _json_dumps(item_data or {}), now),
+        )
+        self.conn.commit()
+        return iid
+
+
+    def remove_actor_item(self, actor_id: str, item_name: str, *, quantity: int = 1) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT id, quantity FROM actor_items WHERE actor_id=? AND LOWER(item_name)=LOWER(?)",
+            (actor_id, item_name),
+        )
+        row = cur.fetchone()
+        if not row:
+            return
+
+        remaining = int(row["quantity"]) - max(1, int(quantity))
+        if remaining > 0:
+            cur.execute("UPDATE actor_items SET quantity=?, updated_at=? WHERE id=?", (remaining, _utc_now_iso(), row["id"]))
+        else:
+            cur.execute("DELETE FROM actor_items WHERE id=?", (row["id"],))
+        self.conn.commit()
 
     def init_session(self, title: str, setting: str) -> SessionInfo:
         """
@@ -238,27 +823,45 @@ class SessionDB:
         state: Optional[Dict[str, Any]] = None,
         location_id: Optional[str] = None,
     ) -> str:
-        lid = location_id or uuid.uuid4().hex
+        """Create or update a location by id, otherwise by case-insensitive name."""
+        name = (name or "").strip() or "Unknown Location"
         now = _utc_now_iso()
         state_json = _json_dumps(state) if state is not None else None
 
         cur = self.conn.cursor()
-        cur.execute("SELECT id FROM locations WHERE id=?", (lid,))
-        if cur.fetchone():
+        lid = location_id
+
+        row = None
+        if lid:
+            cur.execute("SELECT id FROM locations WHERE id=?", (lid,))
+            row = cur.fetchone()
+        if not row:
+            cur.execute("SELECT id FROM locations WHERE LOWER(name)=LOWER(?)", (name,))
+            row = cur.fetchone()
+            if row:
+                lid = row["id"]
+
+        if row:
             cur.execute(
                 """UPDATE locations
-                   SET name=?, description=?, parent_id=?, tags=?, state_json=?, updated_at=?
+                   SET name=?,
+                       description=COALESCE(NULLIF(?, ''), description),
+                       parent_id=COALESCE(?, parent_id),
+                       tags=COALESCE(NULLIF(?, ''), tags),
+                       state_json=COALESCE(?, state_json),
+                       updated_at=?
                    WHERE id=?""",
                 (name, description, parent_id, tags, state_json, now, lid),
             )
         else:
+            lid = lid or uuid.uuid4().hex
             cur.execute(
                 """INSERT INTO locations(id,name,description,parent_id,tags,state_json,updated_at)
                    VALUES(?,?,?,?,?,?,?)""",
                 (lid, name, description, parent_id, tags, state_json, now),
             )
         self.conn.commit()
-        return lid
+        return str(lid)
 
     def get_location(self, location_id: str) -> Optional[Dict[str, Any]]:
         cur = self.conn.cursor()
@@ -274,7 +877,11 @@ class SessionDB:
         cur = self.conn.cursor()
         cur.execute("SELECT * FROM locations WHERE LOWER(name)=LOWER(?)", (name,))
         row = cur.fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        d = dict(row)
+        d["state"] = _json_loads(d.pop("state_json", None)) or {}
+        return d
     
     # ----------------------------
     # Actors (PC/NPC/ENEMY)
@@ -295,13 +902,26 @@ class SessionDB:
         notes: str = "",
         actor_id: Optional[str] = None,
     ) -> str:
-        aid = actor_id or uuid.uuid4().hex
         now = _utc_now_iso()
         stats = stats or {}
 
         cur = self.conn.cursor()
-        cur.execute("SELECT id FROM actors WHERE id=?", (aid,))
-        exists = cur.fetchone() is not None
+        aid = actor_id
+        row = None
+        if aid:
+            cur.execute("SELECT id FROM actors WHERE id=?", (aid,))
+            row = cur.fetchone()
+        if not row:
+            cur.execute(
+                "SELECT id FROM actors WHERE kind=? AND LOWER(name)=LOWER(?)",
+                (kind, name),
+            )
+            row = cur.fetchone()
+            if row:
+                aid = row["id"]
+        if not aid:
+            aid = uuid.uuid4().hex
+        exists = row is not None
 
         vals = dict(
             id=aid, kind=kind, name=name, description=description, location_id=location_id,
@@ -431,6 +1051,8 @@ class SessionDB:
                 "DEX": d["dex"], "APP": d["app"], "INT": d["int"],
                 "POW": d["pow"], "EDU": d["edu"]
             }
+            d["inventory"] = self.list_actor_items(d["id"])
+
             out.append(d)
         return out
 
@@ -516,12 +1138,33 @@ class SessionDB:
             res.append(d)
         return res
 
-    def upsert_thread(self, name: str, *, progress: int = 0, max_progress: int = 6, stakes: str = "", thread_id: Optional[str] = None) -> str:
-        tid = thread_id or uuid.uuid4().hex
+    def upsert_thread(
+        self,
+        name: str,
+        *,
+        progress: int = 0,
+        max_progress: int = 6,
+        stakes: str = "",
+        thread_id: Optional[str] = None,
+    ) -> str:
+        name = (name or "").strip() or "Story Thread"
         now = _utc_now_iso()
         cur = self.conn.cursor()
-        cur.execute("SELECT id FROM threads WHERE id=?", (tid,))
-        if cur.fetchone():
+
+        tid = thread_id
+        row = None
+        if tid:
+            cur.execute("SELECT id FROM threads WHERE id=?", (tid,))
+            row = cur.fetchone()
+        if not row:
+            cur.execute("SELECT id FROM threads WHERE LOWER(name)=LOWER(?)", (name,))
+            row = cur.fetchone()
+            if row:
+                tid = row["id"]
+        if not tid:
+            tid = uuid.uuid4().hex
+
+        if row:
             cur.execute(
                 "UPDATE threads SET name=?, progress=?, max_progress=?, stakes=?, updated_at=? WHERE id=?",
                 (name, int(progress), int(max_progress), stakes, now, tid),
@@ -563,7 +1206,10 @@ class SessionDB:
         out = []
         for r in rows:
             d = dict(r)
-            d["payload"] = _json_loads(d.pop("payload_json", None)) or {}
+            payload = _json_loads(d.pop("payload_json", None))
+            if payload is None:
+                payload = _json_loads(d.get("payload"))
+            d["payload"] = payload or {}
             out.append(d)
         return list(reversed(out))
 
@@ -591,6 +1237,11 @@ class SessionDB:
                     stats.append(f"{k.upper()} {a.get(k)}")
             stats_s = ", ".join(stats)
 
+            items = a.get("inventory") or []
+            items_s = ", ".join(
+                [f"{it['item_name']} x{it.get('quantity',1)}" if int(it.get("quantity",1)) > 1 else it["item_name"] for it in items]
+            ) if items else ""
+
             parts = [a["name"]]
             if a.get("san") is not None:
                 parts.append(f"SAN {a['san']}")
@@ -600,8 +1251,10 @@ class SessionDB:
                 parts.append(stats_s)
             if skills_s:
                 parts.append(f"Skills: {skills_s}")
+            if items_s:
+                parts.append(f"Inventory: {items_s}")
             return " — ".join(parts)
-
+        
         investigators_text = "\n".join([f"- {actor_line(a, include_all_skills=True)}" for a in pcs]) if pcs else "(none)"
         npcs_text = "\n".join([f"- {actor_line(a)}" for a in npcs[:8]]) if npcs else "(none)"
 

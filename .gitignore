@@ -7,6 +7,7 @@ sessions/
 ~/.cache/huggingface/
 .cache/
 data_forge/
+models/
 
 # Python
 *.pyc

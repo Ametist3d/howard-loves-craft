@@ -6,7 +6,12 @@ Within 1-3 investigator actions, at least one of these should usually happen:
 - investigators enter a new meaningful location
 - an NPC reveals new actionable information
 - a threat becomes concrete and changes the objective
+
 If the current exchange is already producing concrete, player-usable information, do not force unrelated escalation just to satisfy pacing.
+
+DISCOVERY RECORDING RULE
+If the narrative establishes a newly discovered object, document, inscription, witness fact, artifact, mechanism, route, or ritual fact as meaningful and actionable, write it into state_updates.clue_found and state_updates.clue_content in the same turn.
+Do not record a clue merely because the object exists or is visible.
 
 ESCALATION RULE
 If 2 consecutive responses occur in the same scene, the 3rd response should usually do one of:
@@ -14,16 +19,12 @@ If 2 consecutive responses occur in the same scene, the 3rd response should usua
 - force contact with an NPC or threat
 - present an irreversible choice
 - create immediate danger
-- deliver a clue that changes what the investigators now know
+- deliver a clue that changes what investigators now know
 However, if the current response is already paying off the player's action with concrete information, dialogue, leverage, or a usable lead, that already counts as progression.
 
 OBJECTIVE CONTINUITY RULE
 When CURRENT OBJECTIVE exists, scene progression should not drift away from it for more than one turn without a concrete reason.
-A concrete reason can be:
-- a threat interrupts
-- a new clue changes priorities
-- an NPC redirects the investigation
-- the player deliberately abandons that lead
+A concrete reason can be: threat interruption, new clue changes priorities, NPC redirects the investigation, or the player deliberately abandons that lead.
 
 FORBIDDEN LOOP PATTERNS
 Do not chain these more than once without payoff:
@@ -45,16 +46,15 @@ If investigators question, pressure, or read the same NPC twice in one scene, th
 - a witness interrupts or overhears
 - the NPC tries to leave, shuts down, threatens, or calls for help
 - outside pressure arrives and forces the scene forward
-If the NPC is already answering naturally and giving useful surface information, do not force an abrupt interruption unless it improves the scene.
 
 PSYCHOLOGY PAYOFF RULE
 A successful Psychology roll must not stop at mood-reading.
 After a success, provide at least one actionable takeaway:
 - what topic causes the reaction
 - what the NPC is specifically hiding
-- what leverage the investigators now have
-- where the NPC’s attention shifts
-- what the investigators can do next to exploit the read
+- what leverage investigators now have
+- where the NPC's attention shifts
+- what investigators can do next to exploit the read
 
 BLUEPRINT ACT GATE
 If the AUTHORITATIVE SCENARIO BLUEPRINT contains multiple acts, do not skip from an early act directly into a later-act location or climax beat without an intermediate payoff.
@@ -70,17 +70,12 @@ Until it has been meaningfully examined or superseded by a stronger clue in play
 
 VISIBLE OBJECT VS DISCOVERED CLUE RULE
 A visible or mentioned object is not automatically a discovered clue.
-Examples of objects that may be visible without being discovered as clues:
-- a diary, journal, ledger, letter, mirror, map, artifact, recording, or photograph
-- a locked drawer, sealed box, or marked document
-- an object an NPC points toward or refuses to discuss
-Such objects may be suggested as valid next actions without forcing clue_found.
-A clue becomes discovered when the investigators learn, confirm, decode, or otherwise gain meaningful, player-usable content from it.
+A clue becomes discovered when investigators learn, confirm, decode, or otherwise gain meaningful, player-usable content from it.
 
 ESCAPE LOOP BREAKER
 If the last few beats are dominated by pursuit, hiding, alarms, or immediate flight, do not extend the chase indefinitely.
-Within 1-2 more responses, either:
-- let the investigators break contact and reassess what they learned
-- force a decisive confrontation or sacrifice
-- convert the chase into a new concrete clue, loss, or route change
-Do not keep generating interchangeable guards, corridors, doors, or near-captures without a scene reset or real payoff.
+Within 1-2 more responses, either let investigators break contact and reassess, force a decisive confrontation or sacrifice, or convert the chase into a concrete clue, loss, or route change.
+
+LATE-ACT RESOLUTION RULE
+If investigators have already reached the source of the current lead, identified the immediate threat, or entered the final act space, stop expanding the scenario sideways with one more clue chain.
+In a late-act scene, the next 1-2 responses should usually force a costly choice, direct confrontation, time-critical containment problem, price of saving someone, escape, sacrifice, negotiation, or collapse.

@@ -5,6 +5,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 #pylint: disable=import-error
 from utils.db_session import SessionDB
+from utils.helpers import coc_percentile_success, coc_success_rank
 
 logger = logging.getLogger("keeper_ai.combat")
 
@@ -20,6 +21,31 @@ SUCCESS_RANK = {
 
 DEFAULT_HUMAN_FIGHTING = 25
 DEFAULT_ENEMY_FIGHTING = 40
+
+
+_COMBAT_TRIGGER_RE = re.compile(
+    r"\b("
+    r"attack|attacks|attacking|"
+    r"fight|fights|fighting|"
+    r"shoot|shoots|shooting|fire|fires|firing|open fire|"
+    r"stab|stabs|stabbing|slash|slashes|slashing|cut|cuts|cutting|"
+    r"kill|kills|killing|hit|hits|hitting|strike|strikes|striking|"
+    r"grab|grabs|grabbing|grapple|grapples|grappling|"
+    r"disarm|disarms|disarming|tackle|tackles|tackling|"
+    r"punch|punches|punching|kick|kicks|kicking|"
+    r"bite|bites|biting|claw|claws|clawing|swing|swings|swinging"
+    r")\b",
+    flags=re.IGNORECASE,
+)
+
+_COMBAT_FALSE_POSITIVE_RE = re.compile(
+    r"\b("
+    r"fire escape|fire alarm|fire door|fireplace|campfire|"
+    r"hit the road|hit the books|strike a deal|"
+    r"grab attention|grab a copy|cut through paperwork"
+    r")\b",
+    flags=re.IGNORECASE,
+)
 
 
 # ─────────────────────────────────────────────
@@ -45,15 +71,36 @@ def _kv_set(db: SessionDB, key: str, value: str) -> None:
 # ─────────────────────────────────────────────
 
 def is_combat_trigger(message: str) -> bool:
-    text = (message or "").strip().lower()
+    """
+    Return True when the canonical English player action is a violence/combat action.
+
+    The chat pipeline should canonicalize player input to English before calling
+    _is_combat_turn()/is_combat_trigger(). This function intentionally avoids
+    multilingual keyword tables so combat detection has one internal language.
+    """
+    text = re.sub(r"\s+", " ", str(message or "").strip().lower())
     if not text:
         return False
-    triggers = (
-        "attack", "attacker", "fight", "shoot", "fire", "stab", "slash", "cut",
-        "kill", "hit", "strike", "grab", "disarm", "tackle", "punch", "kick",
-        "bite", "claw", "swing", "open fire", "aim and shoot"
+
+    if _COMBAT_FALSE_POSITIVE_RE.search(text):
+        return False
+
+    if _COMBAT_TRIGGER_RE.search(text):
+        return True
+
+    phrase_triggers = (
+        "aim and shoot",
+        "draw my gun",
+        "draw the gun",
+        "pull my gun",
+        "ready my weapon",
+        "ready the weapon",
+        "throw a punch",
+        "start a fight",
+        "go for his throat",
+        "go for her throat",
     )
-    return any(t in text for t in triggers)
+    return any(phrase in text for phrase in phrase_triggers)
 
 
 def _safe_json_loads(value: str | None, default):
@@ -63,25 +110,6 @@ def _safe_json_loads(value: str | None, default):
         return json.loads(value)
     except Exception:
         return default
-
-
-def _percentile_success(roll: int, value: int) -> str:
-    value = max(0, int(value))
-    if roll == 100 or (value < 50 and roll >= 96):
-        return "fumble"
-    if roll == 1:
-        return "critical_success"
-    if roll <= max(1, value // 5):
-        return "extreme_success"
-    if roll <= max(1, value // 2):
-        return "hard_success"
-    if roll <= value:
-        return "regular_success"
-    return "failure"
-
-
-def _success_rank(outcome: str) -> int:
-    return SUCCESS_RANK.get((outcome or "").strip().lower(), 0)
 
 
 def _roll_percentile(*, bonus_dice: int = 0, penalty_dice: int = 0) -> int:
@@ -125,6 +153,30 @@ def _max_dice(expr: str) -> int:
         return 0
     return n * d + bonus
 
+def _find_actor_weapon(db: SessionDB, actor_id: str, weapon_name: str) -> dict | None:
+    wanted = (weapon_name or "").strip().lower()
+    if not wanted:
+        return None
+    for item in db.list_actor_items(actor_id):
+        if wanted in str(item.get("item_name", "")).lower():
+            return item
+    return None
+
+
+def _resolve_weapon_profile(db: SessionDB, actor: Dict[str, Any], action: Dict[str, Any]) -> tuple[str, str]:
+    weapon_name = str(action.get("weapon_name", "") or "").strip()
+    if not weapon_name:
+        return "", ""
+
+    item = _find_actor_weapon(db, actor["id"], weapon_name)
+    if item:
+        item_data = item.get("item_data") or {}
+        damage = str(item_data.get("damage", "") or "").strip()
+        if damage:
+            return weapon_name, damage
+
+    # fallback only if you deliberately allow improvised / scene weapons
+    return weapon_name, _default_weapon_damage(action.get("action_type", ""), weapon_name)
 
 # ─────────────────────────────────────────────
 # actor helpers
@@ -577,7 +629,7 @@ def _roll_defender_response(target: Dict[str, Any], defender_option: str, *, bon
         }
 
     roll = _roll_percentile(bonus_dice=bonus_dice, penalty_dice=penalty_dice)
-    outcome = _percentile_success(roll, skill_value)
+    outcome = coc_percentile_success(roll, skill_value)
     return {
         "defender_roll": roll,
         "defender_outcome": outcome,
@@ -618,8 +670,8 @@ def apply_major_wound_and_dying(db: SessionDB, actor_id: int, damage: int) -> Di
     elif major_wound:
         con_value = _actor_stat(actor, "con", 50)
         con_roll = _roll_percentile()
-        con_success = _percentile_success(con_roll, con_value)
-        if _success_rank(con_success) <= 0:
+        con_success = coc_percentile_success(con_roll, con_value)
+        if coc_success_rank(con_success) <= 0:
             unconscious = True
             status = "unconscious"
         else:
@@ -662,8 +714,8 @@ def resolve_dying_checks_if_needed(db: SessionDB) -> List[Dict[str, Any]]:
             continue
         con_value = _actor_stat(actor, "con", 50)
         roll = _roll_percentile()
-        outcome = _percentile_success(roll, con_value)
-        if _success_rank(outcome) <= 0:
+        outcome = coc_percentile_success(roll, con_value)
+        if coc_success_rank(outcome) <= 0:
             db.patch_actor(actor_id=actor["id"], status="dead")
             results.append({
                 "name": actor["name"],
@@ -804,7 +856,7 @@ def resolve_melee_attack(db: SessionDB, action: Dict[str, Any]) -> Dict[str, Any
     defender_option = defender_meta["defender_option"]
 
     attacker_roll = _roll_percentile()
-    attacker_outcome = _percentile_success(attacker_roll, skill_value)
+    attacker_outcome = coc_percentile_success(attacker_roll, skill_value)
 
     defender = _roll_defender_response(
         target,
@@ -813,8 +865,8 @@ def resolve_melee_attack(db: SessionDB, action: Dict[str, Any]) -> Dict[str, Any
         penalty_dice=defender_meta["penalty_dice"],
     )
 
-    a_rank = _success_rank(attacker_outcome)
-    d_rank = _success_rank(defender["defender_outcome"])
+    a_rank = coc_success_rank(attacker_outcome)
+    d_rank = coc_success_rank(defender["defender_outcome"])
 
     attacker_wins = False
     defender_hits_back = False
@@ -835,8 +887,13 @@ def resolve_melee_attack(db: SessionDB, action: Dict[str, Any]) -> Dict[str, Any
     else:
         attacker_wins = a_rank > 0
 
-    weapon_name = action.get("weapon_name", "")
-    weapon_damage = action.get("weapon_damage") or _default_weapon_damage(action.get("action_type", ""), weapon_name)
+    weapon_name = str(action.get("weapon_name", "") or "").strip()
+    resolved_weapon_name, resolved_weapon_damage = _resolve_weapon_profile(db, attacker, action)
+
+    if not weapon_name:
+        weapon_name = resolved_weapon_name
+
+    weapon_damage = str(action.get("weapon_damage", "") or "").strip() or resolved_weapon_damage
     damage_bonus = _calc_damage_bonus_expr(attacker)
     total_damage_expr = _combined_damage_expr(weapon_damage, damage_bonus)
 
@@ -952,16 +1009,16 @@ def resolve_firearm_attack(db: SessionDB, action: Dict[str, Any]) -> Dict[str, A
     if defender_option == "dive_for_cover":
         d_skill = _actor_skill(target, "Dodge")
         defender_roll = _roll_percentile()
-        defender_outcome = _percentile_success(defender_roll, d_skill)
-        if _success_rank(defender_outcome) > 0:
+        defender_outcome = coc_percentile_success(defender_roll, d_skill)
+        if coc_success_rank(defender_outcome) > 0:
             penalty_dice += 1
 
     attacker_roll = _roll_percentile(bonus_dice=bonus_dice, penalty_dice=penalty_dice)
-    attacker_outcome = _percentile_success(attacker_roll, skill_value)
+    attacker_outcome = coc_percentile_success(attacker_roll, skill_value)
 
     hit = False
-    a_rank = _success_rank(attacker_outcome)
-    d_rank = _success_rank(defender_outcome)
+    a_rank = coc_success_rank(attacker_outcome)
+    d_rank = coc_success_rank(defender_outcome)
 
     if defender_option == "dive_for_cover":
         if a_rank > d_rank:
@@ -971,9 +1028,14 @@ def resolve_firearm_attack(db: SessionDB, action: Dict[str, Any]) -> Dict[str, A
     else:
         hit = a_rank > 0
 
-    weapon_name = action.get("weapon_name", "")
-    weapon_damage = action.get("weapon_damage") or _default_weapon_damage("attack_firearm", weapon_name)
+    weapon_name = str(action.get("weapon_name", "") or "").strip()
+    resolved_weapon_name, resolved_weapon_damage = _resolve_weapon_profile(db, attacker, action)
 
+    if not weapon_name:
+        weapon_name = resolved_weapon_name
+
+    weapon_damage = str(action.get("weapon_damage", "") or "").strip() or resolved_weapon_damage
+    
     damage = 0
     target_update = None
     if hit:
@@ -1053,24 +1115,124 @@ def resolve_maneuver(db: SessionDB, action: Dict[str, Any]) -> Dict[str, Any]:
 # top-level orchestration
 # ─────────────────────────────────────────────
 
+def _blank_combat_action(
+    actor_name: str,
+    *,
+    action_type: str = "other",
+    target_name: str = "",
+) -> Dict[str, Any]:
+    return {
+        "start_combat": False,
+        "end_combat": False,
+        "actor_name": actor_name,
+        "target_name": target_name,
+        "action_type": action_type,
+        "skill_name": "Fighting (Brawl)" if action_type in ("attack_melee", "maneuver") else "",
+        "weapon_name": "",
+        "weapon_damage": "1D3" if action_type == "attack_melee" else "",
+        "defender_option": "",
+        "shots_fired": 0,
+        "bonus_dice": 0,
+        "penalty_dice": 0,
+    }
+
+
+def _first_living_pc(db: SessionDB) -> Optional[Dict[str, Any]]:
+    return next(
+        (a for a in db.list_actors("PC") if a.get("status") not in ("dead", "dying", "insane")),
+        None,
+    )
+
+
+def _auto_resolve_non_pc_turns(db: SessionDB, *, safety_limit: int = 8) -> None:
+    """
+    Drive combat until the next acting participant is a PC or combat ends.
+    This prevents enemy/NPC turns from freezing the whole combat state.
+    """
+    for _ in range(safety_limit):
+        state = get_combat_state(db)
+        if not state.get("active"):
+            return
+
+        actor = get_current_combat_actor(db)
+        if not actor:
+            return
+
+        if actor.get("kind") == "PC":
+            return
+
+        if actor.get("kind") == "ENEMY":
+            target = _first_living_pc(db)
+            if not target:
+                _end_combat_if_resolved(db)
+                return
+
+            auto_payload = {
+                "combat_action": _blank_combat_action(
+                    actor["name"],
+                    action_type="attack_melee",
+                    target_name=target["name"],
+                )
+            }
+        else:
+            # For non-PC allies / neutral NPCs, just consume a simple non-attack action
+            # unless you later add explicit NPC AI.
+            auto_payload = {
+                "combat_action": _blank_combat_action(
+                    actor["name"],
+                    action_type="other",
+                    target_name="",
+                )
+            }
+
+        res = submit_combat_action(db, auto_payload)
+        if res.get("resolved"):
+            continue
+
+        # Fail-safe: never let a non-PC turn freeze combat.
+        submit_combat_action(
+            db,
+            {"combat_action": _blank_combat_action(actor["name"], action_type="other")},
+        )
+
+
 def resolve_combat_turn(db: SessionDB, llm_result: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Main entry point for engine.py.
+    Main entry point for engine.py / engine_chat.py.
 
-    Expected llm_result keys:
-      - combat_action (new contract)
-    Mutates/returns llm_result with:
-      - combat_result
-      - updated_actor (when damage/status changed)
+    Guarantees:
+    - non-PC turns do not freeze combat
+    - active PC turns do not silently fall back into freeform mode
+    - wrong/missing actor_name cannot stall initiative
     """
     maybe_start_combat(db, llm_result)
 
+    # First, clear any pending non-PC turns so the next actionable turn is a PC turn.
+    _auto_resolve_non_pc_turns(db)
+
     state = get_combat_state(db)
     if not state.get("active"):
+        llm_result["combat_state"] = state
         return llm_result
+
+    current_actor = get_current_combat_actor(db)
+    combat_action = dict(llm_result.get("combat_action") or {})
+
+    # If the LLM omitted combat_action during an active PC turn, consume the turn as "other"
+    # instead of letting combat silently drift back into routine scene mode.
+    if current_actor and current_actor.get("kind") == "PC":
+        if not combat_action:
+            combat_action = _blank_combat_action(current_actor["name"], action_type="other")
+            llm_result["combat_action"] = combat_action
+        else:
+            actor_name = str(combat_action.get("actor_name", "") or "").strip()
+            if not actor_name or actor_name.lower() != current_actor["name"].strip().lower():
+                combat_action["actor_name"] = current_actor["name"]
+                llm_result["combat_action"] = combat_action
 
     combat_action = llm_result.get("combat_action") or {}
     if not combat_action:
+        llm_result["combat_state"] = get_combat_state(db)
         return llm_result
 
     res = submit_combat_action(db, llm_result)
@@ -1094,5 +1256,9 @@ def resolve_combat_turn(db: SessionDB, llm_result: Dict[str, Any]) -> Dict[str, 
         llm_result["combat_result"]["dying_checks"] = dying_checks
 
     _end_combat_if_resolved(db)
+
+    # After the PC action resolves, immediately advance any intervening non-PC turns.
+    _auto_resolve_non_pc_turns(db)
+
     llm_result["combat_state"] = get_combat_state(db)
     return llm_result

@@ -1,12 +1,11 @@
 import json
-import re
 import logging
+import os
+import re
 from pathlib import Path
 #pylint: disable=import-error
 from utils.db_session import SessionDB
 from utils.helpers import get_llm, kv_get, detect_degenerate_output, clean_degenerate_value
-from utils.prompt_translate import get_language_name
-from langchain_core.prompts import PromptTemplate
 from img_gen.comfy_client import BASE_URL as _COMFY_BASE_URL
 
 logger = logging.getLogger("keeper_ai.helpers.story")
@@ -454,6 +453,61 @@ _MODULE_VERBS = {
     "converging_threads": ("connect the threads", "see the full picture", "unify the evidence"),
 }
 
+def _split_tagged_list(value: str) -> list[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+
+    if raw.upper() in {"NONE", "N/A", "NO", "NULL", "-"}:
+        return []
+
+    parts = re.split(r"\s*\|\s*|\s*;\s*", raw)
+    out = []
+    seen = set()
+
+    for part in parts:
+        clean = re.sub(r"\s+", " ", str(part or "").strip(" -•\t\r\n"))
+        if not clean:
+            continue
+        key = clean.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(clean)
+
+    return out
+
+
+def _fallback_scene_lists(
+    *,
+    scene_name: str,
+    dramatic_question: str,
+    description: str,
+    what_happens: str,
+    reveals: list[str],
+    conceals: list[str],
+    clues_available: list[str],
+    npc_present: list[str],
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    scene_name = str(scene_name or "").strip() or "Scene"
+
+    if not reveals:
+        seed_reveal = str(what_happens or dramatic_question or description).strip()
+        if seed_reveal:
+            reveals = [seed_reveal[:220]]
+
+    if not conceals:
+        hidden_prompt = str(dramatic_question or "").strip()
+        if hidden_prompt:
+            conceals = [hidden_prompt[:180]]
+
+    if not clues_available:
+        clues_available = [f"{scene_name} clue"]
+
+    # npc_present may legitimately be empty in some scenes
+    npc_present = npc_present or []
+
+    return reveals, conceals, clues_available, npc_present
 
 def _generate_act_payload(
     *,
@@ -477,6 +531,9 @@ OUTPUT RULES:
 - Keep values short
 - Do not repeat phrases
 - Produce exactly {scene_count} scenes
+- For list fields, use ` | ` as the separator
+- Do not leave scene structure fields blank unless truly none apply
+- NPC_PRESENT may be NONE when no one is physically present
 
 ACT TAGS:
 ACT_TITLE:
@@ -497,8 +554,18 @@ SCENE_1_TRIGGER:
 SCENE_1_DESCRIPTION:
 SCENE_1_WHAT_HAPPENS:
 SCENE_1_PRESSURE_IF_DELAYED:
+SCENE_1_REVEALS:
+SCENE_1_CONCEALS:
+SCENE_1_CLUES_AVAILABLE:
+SCENE_1_NPC_PRESENT:
 SCENE_1_THREAT_LEVEL:
 SCENE_1_KEEPER_NOTES:
+
+FIELD MEANING:
+- REVEALS: 1-2 concrete facts the investigators can learn in this scene
+- CONCEALS: 0-2 important truths still hidden after this scene
+- CLUES_AVAILABLE: 1-3 concrete clue titles or evidence items discoverable in this scene
+- NPC_PRESENT: 0-3 names of NPCs physically present or directly encountered in the scene; use NONE if none
 
 Repeat the same pattern up to SCENE_{scene_count}_...
 
@@ -524,14 +591,16 @@ PREVIOUS ACTS SUMMARY:
         prompt,
         task="scenario_tagged",
         num_ctx=9000,
-        num_predict=1800,
+        num_predict=2200,
     )
     logger.info("SCENARIO_ACT_RAW[%s]: %r", act_no, str(raw)[:8000])
 
     scene_suffixes = [
         "NAME", "LOCATION", "FUNCTION", "DRAMATIC_QUESTION",
         "ENTRY", "EXIT", "TRIGGER", "DESCRIPTION",
-        "WHAT_HAPPENS", "PRESSURE_IF_DELAYED", "THREAT_LEVEL", "KEEPER_NOTES",
+        "WHAT_HAPPENS", "PRESSURE_IF_DELAYED",
+        "REVEALS", "CONCEALS", "CLUES_AVAILABLE", "NPC_PRESENT",
+        "THREAT_LEVEL", "KEEPER_NOTES",
     ]
     allowed = {
         "ACT_TITLE", "ACT_SUMMARY", "ACT_PURPOSE",
@@ -542,25 +611,52 @@ PREVIOUS ACTS SUMMARY:
 
     verbs = _MODULE_VERBS.get(module_type, ("investigate", "advance", "decide"))
 
-    # build scenes with seed-aware defaults
     scenes = []
     for i in range(1, scene_count + 1):
         verb = verbs[min(i - 1, len(verbs) - 1)]
+
+        scene_name = lines.get(f"SCENE_{i}_NAME") or f"Scene {i}: {verb.title()}"
+        location = lines.get(f"SCENE_{i}_LOCATION") or "Unfixed location"
+        scene_function = lines.get(f"SCENE_{i}_FUNCTION") or "investigation"
+        dramatic_question = lines.get(f"SCENE_{i}_DRAMATIC_QUESTION") or f"Can the investigators {verb}?"
+        entry_condition = lines.get(f"SCENE_{i}_ENTRY") or "Investigators pursue the current lead."
+        exit_condition = lines.get(f"SCENE_{i}_EXIT") or "They leave with a clearer direction."
+        trigger = lines.get(f"SCENE_{i}_TRIGGER") or "Evidence or pressure forces the next step."
+        description = lines.get(f"SCENE_{i}_DESCRIPTION") or f"The investigators attempt to {verb}."
+        what_happens = lines.get(f"SCENE_{i}_WHAT_HAPPENS") or f"The situation changes as they {verb}."
+        pressure_if_delayed = lines.get(f"SCENE_{i}_PRESSURE_IF_DELAYED") or "The situation worsens."
+
+        reveals = _split_tagged_list(lines.get(f"SCENE_{i}_REVEALS", ""))
+        conceals = _split_tagged_list(lines.get(f"SCENE_{i}_CONCEALS", ""))
+        clues_available = _split_tagged_list(lines.get(f"SCENE_{i}_CLUES_AVAILABLE", ""))
+        npc_present = _split_tagged_list(lines.get(f"SCENE_{i}_NPC_PRESENT", ""))
+
+        reveals, conceals, clues_available, npc_present = _fallback_scene_lists(
+            scene_name=scene_name,
+            dramatic_question=dramatic_question,
+            description=description,
+            what_happens=what_happens,
+            reveals=reveals,
+            conceals=conceals,
+            clues_available=clues_available,
+            npc_present=npc_present,
+        )
+
         scenes.append({
-            "scene": lines.get(f"SCENE_{i}_NAME") or f"Scene {i}: {verb.title()}",
-            "location": lines.get(f"SCENE_{i}_LOCATION") or "Unfixed location",
-            "scene_function": lines.get(f"SCENE_{i}_FUNCTION") or "investigation",
-            "dramatic_question": lines.get(f"SCENE_{i}_DRAMATIC_QUESTION") or f"Can the investigators {verb}?",
-            "entry_condition": lines.get(f"SCENE_{i}_ENTRY") or "Investigators pursue the current lead.",
-            "exit_condition": lines.get(f"SCENE_{i}_EXIT") or "They leave with a clearer direction.",
-            "trigger": lines.get(f"SCENE_{i}_TRIGGER") or f"Evidence or pressure forces the next step.",
-            "description": lines.get(f"SCENE_{i}_DESCRIPTION") or f"The investigators attempt to {verb}.",
-            "what_happens": lines.get(f"SCENE_{i}_WHAT_HAPPENS") or f"The situation changes as they {verb}.",
-            "pressure_if_delayed": lines.get(f"SCENE_{i}_PRESSURE_IF_DELAYED") or "The situation worsens.",
-            "reveals": [],
-            "conceals": [],
-            "clues_available": [],
-            "npc_present": [],
+            "scene": scene_name,
+            "location": location,
+            "scene_function": scene_function,
+            "dramatic_question": dramatic_question,
+            "entry_condition": entry_condition,
+            "exit_condition": exit_condition,
+            "trigger": trigger,
+            "description": description,
+            "what_happens": what_happens,
+            "pressure_if_delayed": pressure_if_delayed,
+            "reveals": reveals,
+            "conceals": conceals,
+            "clues_available": clues_available,
+            "npc_present": npc_present,
             "threat_level": lines.get(f"SCENE_{i}_THREAT_LEVEL") or "tension",
             "keeper_notes": lines.get(f"SCENE_{i}_KEEPER_NOTES") or "Keep the scene concise and playable.",
         })
@@ -576,7 +672,6 @@ PREVIOUS ACTS SUMMARY:
         ],
         "scenes": scenes,
     }
-
 
 def _normalize_act_payload(payload: dict, *, act_no: int, scene_count: int, module_type: str) -> dict:
     payload = dict(payload or {})
@@ -599,21 +694,62 @@ def _normalize_act_payload(payload: dict, *, act_no: int, scene_count: int, modu
     for i, scene in enumerate(scenes, start=1):
         if not isinstance(scene, dict):
             scene = {}
+
+        scene_name = str(scene.get("scene") or f"Scene {i}")
+        dramatic_question = str(scene.get("dramatic_question") or "What changes here?")
+        description = str(scene.get("description") or "The investigators confront a new layer of the problem.")
+        what_happens = str(scene.get("what_happens") or "Evidence and pressure reshape the situation.")
+
+        reveals = scene.get("reveals")
+        if isinstance(reveals, str):
+            reveals = _split_tagged_list(reveals)
+        elif not isinstance(reveals, list):
+            reveals = []
+
+        conceals = scene.get("conceals")
+        if isinstance(conceals, str):
+            conceals = _split_tagged_list(conceals)
+        elif not isinstance(conceals, list):
+            conceals = []
+
+        clues_available = scene.get("clues_available")
+        if isinstance(clues_available, str):
+            clues_available = _split_tagged_list(clues_available)
+        elif not isinstance(clues_available, list):
+            clues_available = []
+
+        npc_present = scene.get("npc_present")
+        if isinstance(npc_present, str):
+            npc_present = _split_tagged_list(npc_present)
+        elif not isinstance(npc_present, list):
+            npc_present = []
+
+        reveals, conceals, clues_available, npc_present = _fallback_scene_lists(
+            scene_name=scene_name,
+            dramatic_question=dramatic_question,
+            description=description,
+            what_happens=what_happens,
+            reveals=reveals,
+            conceals=conceals,
+            clues_available=clues_available,
+            npc_present=npc_present,
+        )
+
         norm_scenes.append({
-            "scene": str(scene.get("scene") or f"Scene {i}"),
+            "scene": scene_name,
             "location": str(scene.get("location") or "Unfixed location"),
             "scene_function": str(scene.get("scene_function") or "investigation"),
-            "dramatic_question": str(scene.get("dramatic_question") or "What changes here?"),
+            "dramatic_question": dramatic_question,
             "entry_condition": str(scene.get("entry_condition") or "Investigators pursue the current lead."),
             "exit_condition": str(scene.get("exit_condition") or "They leave with a clearer direction."),
             "trigger": str(scene.get("trigger") or "A clue or pressure forces movement."),
-            "description": str(scene.get("description") or "The investigators confront a new layer of the problem."),
-            "what_happens": str(scene.get("what_happens") or "Evidence and pressure reshape the situation."),
+            "description": description,
+            "what_happens": what_happens,
             "pressure_if_delayed": str(scene.get("pressure_if_delayed") or "The situation worsens."),
-            "reveals": scene.get("reveals") if isinstance(scene.get("reveals"), list) else [],
-            "conceals": scene.get("conceals") if isinstance(scene.get("conceals"), list) else [],
-            "clues_available": scene.get("clues_available") if isinstance(scene.get("clues_available"), list) else [],
-            "npc_present": scene.get("npc_present") if isinstance(scene.get("npc_present"), list) else [],
+            "reveals": reveals,
+            "conceals": conceals,
+            "clues_available": clues_available,
+            "npc_present": npc_present,
             "threat_level": str(scene.get("threat_level") or "tension"),
             "keeper_notes": str(scene.get("keeper_notes") or "Keep the scene concise and playable."),
         })
@@ -942,6 +1078,14 @@ def build_scene_loop_guard(db: SessionDB) -> str:
     )
 
 
+
+def _compact_visual_text(text: str, limit: int = 700) -> str:
+    """Keep image prompts deterministic and bounded; no LLM call."""
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    text = re.sub(r"<[^>]+>", "", text)
+    return text[:limit].rstrip(" ,.;")
+
+
 def build_scene_prompt(
     narrative: str,
     era: str = "",
@@ -950,137 +1094,320 @@ def build_scene_prompt(
     char_visuals: str = "",
 ) -> str:
     """
-    Generates a Flux image prompt from the current scene narrative.
-    Uses a low-temperature Gemma call for consistency.
-    Imported here to keep engine.py free of nested function definitions.
-    """
-    from langchain_core.prompts import PromptTemplate
+    Deterministic Flux/Comfy scene prompt builder.
 
-    tpl = PromptTemplate.from_template(
-        "You are a prompt engineer for Flux, a natural-language image model. "
-        "Your job is to generate a consistent visual description across a series of scenes.\n\n"
-        "Setting/Era context: {era}, {setting}\n\n"
-        "{char_visuals}\n\n"
-        "PREVIOUS SCENE DESCRIPTIONS (for visual consistency):\n{visual_history}\n\n"
-        "STEP 1 — Read the ENTIRE narrative. Identify key element or location that carries the most narrative weight.\n"
-        "STEP 2 - Start with `Painterly digital illustration of...` \n"
-        "STEP 3 — if narrating location - write description to recreate that environment, if narrating subject - frame it as a close or medium shot. That element must be the visual centerpiece.\n"
-        "STEP 4 — Write 2-3 short natural sentences. If characters from the established list appear, "
-        "describe them using their established appearance. Match era and setting in every detail.\n"
-        "STEP 5 — Append exactly: 'Painterly digital illustration, pulp horror aesthetic, dramatic lighting, rich deep colors.'\n\n"
-        "RULES:\n"
-        "- English only. No character names. No smell or sound.\n"
-        "- Output ONLY the final prompt, nothing else\n\n"
-        "NARRATIVE:\n{narrative}\n\nPROMPT:"
+    Previous version used an extra LLM call per generated scene image.
+    That was a major hidden GPT/Ollama cost source. This version is cheap,
+    stable, and good enough for scene illustrations.
+    """
+    era_setting = _compact_visual_text(" ".join(x for x in [era, setting] if x), 360)
+    scene = _compact_visual_text(narrative, 820)
+    visual_notes = _compact_visual_text(" ".join(x for x in [char_visuals, visual_history] if x), 360)
+
+    parts = [
+        "Painterly digital illustration of a Call of Cthulhu investigative scene",
+    ]
+
+    if era_setting:
+        parts.append(f"set in {era_setting}")
+
+    if scene:
+        parts.append(f"visual centerpiece: {scene}")
+
+    if visual_notes:
+        parts.append(f"maintain continuity with established visuals: {visual_notes}")
+
+    parts.append(
+        "period-appropriate details, cinematic composition, atmospheric horror, no text overlays, no modern objects unless specified"
     )
-    llm = get_llm(temperature=0.3)
-    raw = (tpl | llm).invoke({
-        "narrative": narrative,
-        "era": era,
-        "setting": setting,
-        "visual_history": visual_history or "No previous scenes yet.",
-        "char_visuals": char_visuals or "",
-    }).strip()
-    return " ".join(line.strip() for line in raw.splitlines() if line.strip())
+    parts.append(
+        "Painterly digital illustration, pulp horror aesthetic, dramatic lighting, rich deep colors."
+    )
+
+    return ". ".join(x.strip(" .") for x in parts if x and x.strip()) + "."
 
 
 async def compress_story(db: SessionDB) -> None:
     """
-    Compresses the full chat history into a rolling story digest stored in
-    kv_store['story_digest']. Called every N turns from handle_chat_logic.
-    The digest is injected at the top of every prompt as the model's primary
-    long-term memory anchor.
+    Compress full chat history into kv_store['story_digest'].
+
+    Cost controls:
+    - KEEPER_ENABLE_DIGEST=0 disables this entirely.
+    - Digest is canonical English to prevent prompt language drift.
+    - Caller controls cadence in engine._should_refresh_digest().
     """
+    if os.getenv("KEEPER_ENABLE_DIGEST", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return
+
     try:
         all_events = db.list_events(limit=60)
         chat_lines = []
         for e in all_events:
             if e.get("event_type") == "CHAT":
                 p = e.get("payload", {})
-                chat_lines.append(f"{p.get('role', '?').upper()}: {p.get('content', '')}")
+                content = str(p.get("content", "") or "").strip()
+                if content:
+                    chat_lines.append(f"{p.get('role', '?').upper()}: {content}")
 
         if len(chat_lines) < 4:
-            return  # Not enough material to compress yet
+            return
 
         full_history = "\n\n".join(chat_lines)
-
         cur = db.conn.cursor()
         prev_digest = kv_get(cur, "story_digest", "(none yet)")
-        lang = kv_get(cur, "language", "en")
-        language_name = get_language_name(lang)
 
         compression_prompt = (
-            f"You are a scribe summarizing a Call of Cthulhu session for continuity.\n"
-            f"Language: {language_name}. Write the digest in this language.\n\n"
-            f"PREVIOUS DIGEST (events before this batch):\n{prev_digest}\n\n"
+            "You are a continuity scribe for a Call of Cthulhu session.\n"
+            "Write the digest in canonical English only.\n\n"
+            f"PREVIOUS DIGEST:\n{prev_digest}\n\n"
             f"RECENT SESSION EXCHANGES:\n{full_history[-6000:]}\n\n"
-            f"Write a STORY DIGEST — a compact, factual record of what has happened in this session.\n"
-            f"Format: numbered bullet points, past tense.\n"
-            f"Cover: locations visited, NPCs encountered (what was learned from/about them), clues found,\n"
-            f"player decisions and their outcomes, plot threads advanced, any deaths/san loss/injuries.\n"
-            f"DO NOT speculate. Only record what actually happened in the exchanges above.\n"
-            f"Maximum 220 words. No preamble. Start directly with '1.'\n"
-            f"DIGEST:"
+            "Write a compact factual STORY DIGEST.\n"
+            "Rules:\n"
+            "- Past tense.\n"
+            "- Numbered bullet points.\n"
+            "- Only facts established in play.\n"
+            "- Include locations, NPCs, clues, decisions, outcomes, injuries, sanity changes, and active time pressure.\n"
+            "- Do not speculate.\n"
+            "- Maximum 220 words.\n"
+            "- Start directly with '1.'\n\n"
+            "DIGEST:"
         )
 
-        llm = get_llm(temperature=0.2)
-        digest = llm.invoke(compression_prompt).strip()
+        llm = get_llm(temperature=0.2, task="story_digest")
+        digest = str(llm.invoke(compression_prompt) or "").strip()
+        if not digest:
+            return
 
         cur.execute(
             "INSERT OR REPLACE INTO kv_store (key, value) VALUES ('story_digest', ?)",
-            (digest,)
+            (digest,),
         )
         db.conn.commit()
-        logger.info(f"Story digest compressed: {len(digest)} chars")
+        logger.info("Story digest compressed: %s chars", len(digest))
 
     except Exception as e:
-        logger.warning(f"Story compression failed: {e}")
+        logger.warning("Story compression failed: %s", e)
 
 
 async def generate_avatar_logic(req) -> dict:
-    from pathlib import Path as _Path
+    """
+    Deterministic avatar prompt + Comfy generation.
 
-    # _COMFY_BASE_URL = "https://provided-feeds-pipe-avatar.trycloudflare.com"
-    _REQUEST_BODY_PATH = _Path(__file__).resolve().parent.parent / "img_gen" / "request_body.json"
+    Previous version used an LLM prompt-engineering call for every avatar.
+    This version builds the prompt directly from supplied character fields.
+    """
+    request_body_path = Path(__file__).resolve().parent.parent / "img_gen" / "request_body.json"
 
-    # Build portrait prompt
-    tpl = PromptTemplate.from_template(
-        "You are a prompt engineer for Flux, a natural-language image model.\n"
-        "Write a portrait prompt for this character. Era/setting: {era}.\n\n"
-        "Character: {occupation}, {description}\n\n"
-        "RULES:\n"
-        "- English only\n"
-        " - Start with `Painterly digital illustration of...` \n"
-        "- 1-2 sentences describing: most prominent character features matching character back-story, clothing appropriate to the era, and setting, posture/mood\n"
-        "- Framing: upper body portrait, neutral or slightly dramatic background\n"
-        "- No character names\n"
-        "- End with exactly: 'Painterly digital illustration, pulp horror aesthetic, dramatic lighting, rich deep colors.'\n"
-        "- Output ONLY the prompt, nothing else\n\n"
-        "PORTRAIT PROMPT:"
+    era = _compact_visual_text(getattr(req, "era_context", "") or "1920s Lovecraftian Horror", 220)
+    occupation = _compact_visual_text(getattr(req, "occupation", "Investigator") or "Investigator", 120)
+    description = _compact_visual_text(getattr(req, "physical_description", "") or "period investigator", 520)
+
+    portrait_prompt = (
+        "Painterly digital illustration of "
+        f"a {occupation}, {description}. "
+        f"Era and setting: {era}. "
+        "Upper body portrait, period-appropriate clothing, restrained investigative horror mood, "
+        "neutral or slightly dramatic background, no text overlay, no name caption. "
+        "Painterly digital illustration, pulp horror aesthetic, dramatic lighting, rich deep colors."
     )
-    llm = get_llm(temperature=0.3)
-    portrait_prompt = (tpl | llm).invoke({
-        "era": req.era_context or "1920s Lovecraftian Horror",
-        "occupation": req.occupation,
-        "description": req.physical_description
-    }).strip()
-    portrait_prompt = " ".join(l.strip() for l in portrait_prompt.splitlines() if l.strip())
+    portrait_prompt = re.sub(r"\s+", " ", portrait_prompt).strip()
 
-    logger.info(f"Avatar prompt for {req.name}: {portrait_prompt}")
+    logger.info("Avatar prompt for %s: %s", getattr(req, "name", "Unknown"), portrait_prompt)
 
     try:
         from img_gen.comfy_client import ComfyClient
-        _comfy = ComfyClient(_COMFY_BASE_URL)
-        with open(_REQUEST_BODY_PATH, "r", encoding="utf-8") as _f:
-            _body = json.load(_f)
-        _body["params"]["prompt"] = portrait_prompt
-        _body["params"]["width"] = 480
-        _body["params"]["height"] = 640
-        img_result = _comfy.generate(_body)
+        comfy = ComfyClient(_COMFY_BASE_URL)
+        with open(request_body_path, "r", encoding="utf-8") as f:
+            body = json.load(f)
+        body["params"]["prompt"] = portrait_prompt
+        body["params"]["width"] = 480
+        body["params"]["height"] = 640
+        img_result = comfy.generate(body)
         return {
             "image_url": img_result["image_url"],
-            "portrait_prompt": portrait_prompt
+            "portrait_prompt": portrait_prompt,
         }
     except Exception as e:
-        logger.warning(f"Avatar generation failed for {req.name}: {e}")
+        logger.warning("Avatar generation failed for %s: %s", getattr(req, "name", "Unknown"), e)
         return {"image_url": None, "portrait_prompt": portrait_prompt}
+
+def _norm_guard_text(text: object) -> str:
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    return text[:500]
+
+
+def build_state_continuity_guard(db: SessionDB) -> str:
+    """
+    Deterministic continuity block.
+
+    Unlike story_digest, this is not LLM-written and cannot forget that
+    a clue/location was already established.
+    """
+    cur = db.conn.cursor()
+    digest = kv_get(cur, "story_digest", "")
+
+    current_scene = db.get_current_story_scene()
+    current_scene_name = current_scene.get("name", "") if current_scene else ""
+    current_scene_location = current_scene.get("location_name", "") if current_scene else ""
+
+    found_clues = db.list_clues(status="found", limit=12)
+    clue_lines = []
+    for c in found_clues[:10]:
+        title = _norm_guard_text(c.get("title", ""))
+        content = _norm_guard_text(c.get("content", ""))
+        if title:
+            clue_lines.append(f"- {title}: {content[:220]}")
+
+    recent_progress = []
+    for e in db.list_events(limit=36):
+        if e.get("event_type") not in {"LOCATION_CHANGE", "CLUE_FOUND", "THREAD_PROGRESS"}:
+            continue
+        payload = e.get("payload") or {}
+        blob = _norm_guard_text(" | ".join(str(v or "") for v in payload.values()))
+        if blob:
+            recent_progress.append(f"- {e.get('event_type')}: {blob}")
+
+    if not clue_lines and not recent_progress and not digest:
+        return ""
+
+    return (
+        "\n\n--- DETERMINISTIC CONTINUITY / ANTI-REDISCOVERY GUARD ---\n"
+        f"Current DB scene: {current_scene_name}\n"
+        f"Current DB location: {current_scene_location}\n\n"
+        "Already established clues/facts:\n"
+        + ("\n".join(clue_lines) if clue_lines else "- none recorded")
+        + "\n\nRecent structured progress events:\n"
+        + ("\n".join(recent_progress[-10:]) if recent_progress else "- none recorded")
+        + "\n\nRules for this turn:\n"
+        "- Do NOT rediscover, rename, or restate an already established clue as new.\n"
+        "- Do NOT suggest following a map/lead to a location the investigators already reached.\n"
+        "- Do NOT send investigators back to an earlier node unless the player explicitly retreats.\n"
+        "- If the player reviews known notes, give only new implication, warning, cost, or choice.\n"
+        "- If no new information remains in the current object/source, say so and push toward consequence, threat, or decision.\n"
+        "----------------------------------------------------------"
+    )
+def _loop_tokens(text: str) -> set[str]:
+    stop = {
+        "the", "and", "for", "with", "from", "into", "that", "this", "there",
+        "their", "they", "them", "your", "you", "are", "was", "were", "has",
+        "have", "had", "investigators", "attempt", "examine", "search",
+        "closely", "carefully",
+    }
+    return {
+        t
+        for t in re.findall(r"[a-zA-Z0-9’']{4,}", str(text or "").lower())
+        if t not in stop
+    }
+
+
+def _similar_loop_text(a: str, b: str, threshold: float = 0.68) -> bool:
+    ta = _loop_tokens(a)
+    tb = _loop_tokens(b)
+    if not ta or not tb:
+        return False
+    return len(ta & tb) / max(1, min(len(ta), len(tb))) >= threshold
+
+
+def suppress_known_destination_suggestions(db: SessionDB, result: dict) -> dict:
+    
+    
+    def _dedupe_keep_order(items: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+
+        for item in items or []:
+            clean = re.sub(r"\s+", " ", str(item or "")).strip()
+            key = clean.lower()
+            if clean and key not in seen:
+                seen.add(key)
+                out.append(clean)
+
+        return out
+    
+    safe = dict(result or {})
+    actions = [str(a or "").strip() for a in safe.get("suggested_actions") or [] if str(a or "").strip()]
+
+    reached = []
+    for e in db.list_events(limit=80):
+        if e.get("event_type") == "LOCATION_CHANGE":
+            loc = str((e.get("payload") or {}).get("location", "") or "").strip()
+            if loc:
+                reached.append(loc.lower())
+
+    cleaned = []
+    for action in actions:
+        lower = action.lower()
+        is_follow_known = (
+            re.search(r"\b(follow|go to|travel to|head to)\b", lower)
+            and any(loc and loc in lower for loc in reached)
+        )
+        if not is_follow_known:
+            cleaned.append(action)
+
+    if len(cleaned) != len(actions):
+        cleaned.append("Use the established evidence to force the next decision")
+        cleaned.append("Identify what new danger the current device or site creates")
+        safe["suggested_actions"] = _dedupe_keep_order(cleaned)[:3]
+
+    return safe
+
+def detect_generated_loop(db: SessionDB, result: dict) -> list[str]:
+    """
+    Detects model output that repeats established facts/leads as if new.
+
+    Returns violation strings. These can be used for one repair retry.
+    """
+    violations: list[str] = []
+
+    result = result or {}
+    updates = result.get("state_updates") or {}
+
+    narrative = str(result.get("narrative", "") or "")
+    suggestions = " ".join(str(x or "") for x in result.get("suggested_actions") or [])
+    output_blob = f"{narrative}\n{suggestions}\n{updates.get('clue_found','')}\n{updates.get('clue_content','')}\n{updates.get('thread_progress','')}"
+
+    # 1. Re-suggesting already reached places.
+    reached_locations = []
+    for e in db.list_events(limit=80):
+        if e.get("event_type") == "LOCATION_CHANGE":
+            loc = str((e.get("payload") or {}).get("location", "") or "").strip()
+            if loc:
+                reached_locations.append(loc)
+
+    for loc in reached_locations:
+        if loc and loc.lower() in suggestions.lower():
+            if re.search(r"\b(follow|go to|travel to|return to|head to|lead to)\b", suggestions, flags=re.I):
+                violations.append(f"re_suggests_reached_location:{loc}")
+
+    # 2. Re-discovering existing clue title/content.
+    clue_title = str(updates.get("clue_found", "") or "").strip()
+    clue_content = str(updates.get("clue_content", "") or "").strip()
+
+    if clue_title:
+        for c in db.list_clues(status="found", limit=80):
+            old_title = str(c.get("title", "") or "")
+            old_content = str(c.get("content", "") or "")
+            if old_title and _similar_loop_text(clue_title, old_title, threshold=0.80):
+                if clue_content and _similar_loop_text(clue_content, old_content, threshold=0.60):
+                    violations.append(f"duplicate_clue_output:{old_title}")
+                    break
+
+    # 3. The output offers only inspect/search/consult/follow variants after several similar turns.
+    recent_user = []
+    for e in db.list_events(limit=16):
+        if e.get("event_type") == "CHAT" and (e.get("payload") or {}).get("role") == "User":
+            recent_user.append(str((e.get("payload") or {}).get("content", "") or ""))
+
+    recent_blob = "\n".join(recent_user[-5:])
+    soft_loop_verbs = r"\b(examine|inspect|search|consult|study|look|follow|trace)\b"
+    if len(re.findall(soft_loop_verbs, recent_blob, flags=re.I)) >= 3:
+        if not any(_clean for _clean in [
+            str(updates.get("location_name", "") or "").strip(),
+            str(updates.get("clue_found", "") or "").strip(),
+            str(updates.get("thread_progress", "") or "").strip(),
+        ]):
+            violations.append("soft_investigation_loop_no_state_change")
+
+    result = suppress_known_destination_suggestions(db, result)
+
+    return violations

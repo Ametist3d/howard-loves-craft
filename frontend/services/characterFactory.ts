@@ -507,6 +507,7 @@ function calcBuildAndDamageBonus(str: number, siz: number): { build: number; dam
   return { build, damageBonus: `+${dice}D6` };
 }
 
+
 function buildAttributes(chars: any, age: number): Attributes {
   const hpMax = Math.floor((chars.CON + chars.SIZ) / 10);
   const sanityStart = chars.POW;
@@ -843,6 +844,18 @@ export async function buildInvestigator(
 ): Promise<Investigator> {
   const chars = charData.characteristics;
   const age = Number(charData.age || 30);
+
+
+const safeCharacteristics = {
+    STR: Number(chars.STR ?? 50),
+    CON: Number(chars.CON ?? 50),
+    SIZ: Number(chars.SIZ ?? 50),
+    DEX: Number(chars.DEX ?? 50),
+    APP: Number(chars.APP ?? 50),
+    INT: Number(chars.INT ?? 50),
+    POW: Number(chars.POW ?? 50),
+    EDU: Number(chars.EDU ?? 50),
+  };
 
   const attributes: Attributes = buildAttributes(chars, age);
   const skillMap = buildBaseSkillMap(chars);

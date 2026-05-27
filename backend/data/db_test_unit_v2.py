@@ -3,8 +3,16 @@ from langchain_chroma import Chroma
 
 emb = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-large")
 
-rules = Chroma(persist_directory="./data/coc_rules_db", embedding_function=emb)
-scen  = Chroma(persist_directory="./data/coc_scenario_db", embedding_function=emb)
+from pathlib import Path
+BASE = Path(__file__).resolve().parent  # backend/data
+rules = Chroma(
+    persist_directory=str(BASE / "coc_rules_db"),
+    embedding_function=emb,
+)
+scen = Chroma(
+    persist_directory=str(BASE / "coc_scenario_db"),
+    embedding_function=emb,
+)
 
 def probe(db, q, k=5):
     print("\n" + "="*80)
@@ -15,14 +23,15 @@ def probe(db, q, k=5):
         print(f"\n[{i}] score={score:.4f}  meta={doc.metadata}")
         print(txt[:350], "...")
     return hits
+print(f"Testing ChromaDB {rules} with sanity probes...")
 
 # 1) Keyword sanity (must bring the exact section)
-probe(rules, "pushing rolls retry once higher stakes", k=5)
-probe(rules, "SAN roll when encounter unnatural failed roll sanity loss", k=5)
+probe(rules, "what skill check if player wants to open locked wooden box", k=5)
+probe(rules, "what skill check to study old manuscript", k=5)
 
 # 2) RU query sanity (should still work ok with multilingual embeddings)
 probe(rules, "проверка рассудка при столкновении с необъяснимым", k=5)
-
+print(f"Testing ChromaDB {scen} with sanity probes...")
 # 3) Scenario atoms sanity
 probe(scen, "isolation arctic signal", k=5)
 probe(scen, "forbidden text disappearance institutional", k=5)

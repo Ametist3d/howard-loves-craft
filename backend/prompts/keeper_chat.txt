@@ -1,9 +1,0 @@
-This project now uses a modular Keeper prompt stack assembled at runtime from prompts/keeper/*.txt.
-Files:
-- header.txt
-- core_identity.txt
-- output_contract.txt
-- action_adjudication.txt
-- roll_resolution.txt
-- scene_progression.txt
-- opening_scene.txt

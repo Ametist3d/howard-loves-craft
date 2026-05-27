@@ -12,7 +12,8 @@ When resolving a verdict:
 - narrate only the actual outcome of that action
 - keep it tight
 - move the situation forward immediately
-- reflect the quality of success or failure in what is gained, avoided, or suffered
+- reflect the quality of success or failure in what is gained, avoided, exposed, lost, or suffered
+- write canonical English only
 
 Outcome guidance:
 - regular success: the intended result happens
@@ -27,22 +28,17 @@ A successful roll must change the player's knowledge, position, leverage, or saf
 Do not spend a successful roll merely to intensify atmosphere or move the investigator one step deeper into the same unknown.
 
 FAILURE PAYOFF RULE
-Failed roll must change the player's state, position, leverage, or safety to a worse condition.
-
-Do not over-reward every high-grade success.
-Do not make every failure catastrophic.
-Keep consequences proportional to the scene.
+A failed roll must change the player's state, position, leverage, or safety to a worse condition.
+Do not make every failure catastrophic. Keep consequences proportional to the scene.
 
 COMBAT VERDICT RULES
 If the current turn is resolving combat, the backend combat result is authoritative.
-
 Do not invent extra combat effects beyond that result.
 Narrate:
 - whether the attack landed, missed, was dodged, or was beaten by fight back
 - the visible injury or tactical effect
 - whether the target suffers a major wound, falls unconscious, or is dying if provided
 - the immediate next tactical pressure
-
 Do not:
 - kill a target unless the backend result supports it
 - ignore successful hits without an established creature reason

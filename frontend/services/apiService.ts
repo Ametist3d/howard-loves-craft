@@ -3,6 +3,44 @@ import { buildInvestigator } from "./characterFactory";
 
 const API_BASE = "/api";
 
+function fallbackChatResponse(narrative: string): ChatResponse {
+  return {
+    narrative,
+    suggested_actions: [],
+    state_updates: {
+      character_name: "",
+      hp_change: 0,
+      sanity_change: 0,
+      mp_change: 0,
+      inventory_add: "",
+      inventory_remove: "",
+      location_name: "",
+      location_description: "",
+      clue_found: "",
+      clue_content: "",
+      thread_progress: "",
+    },
+    roll_request: { required: false, skill_name: "", action_text: "", reason: "" },
+    combat_action: {
+      start_combat: false,
+      end_combat: false,
+      actor_name: "",
+      target_name: "",
+      action_type: "",
+      skill_name: "",
+      weapon_name: "",
+      weapon_damage: "",
+      defender_option: "",
+      shots_fired: 0,
+      bonus_dice: 0,
+      penalty_dice: 0,
+    },
+    scene_entities: { present_named_entities: [] },
+    image_url: null,
+    generation_id: null,
+  } as ChatResponse;
+}
+
 export class ApiService {
 
   private authHeaders(): Record<string, string> {
@@ -143,10 +181,7 @@ export class ApiService {
       return await response.json();
     } catch (error) {
       console.error("Local API Chat Error:", error);
-      return {
-        narrative: "(The Keeper remains silent... connection to local Python backend failed.)",
-        suggested_actions: [],
-      };
+      return fallbackChatResponse("(The Keeper remains silent... connection to local Python backend failed.)");
     }
   }
 
@@ -215,6 +250,33 @@ export class ApiService {
     });
 
     return () => controller.abort();
+  }
+
+
+  public async health(): Promise<{ ok: boolean; [key: string]: any }> {
+    try {
+      const response = await fetch(`${API_BASE}/health`, { headers: this.authHeaders() });
+      if (!response.ok) return { ok: false };
+      return await response.json();
+    } catch {
+      return { ok: false };
+    }
+  }
+
+  public async setSceneImages(enabled: boolean): Promise<void> {
+    await fetch(`${API_BASE}/set-scene-images`, {
+      method: "POST",
+      headers: this.authHeaders(),
+      body: JSON.stringify({ enabled }),
+    });
+  }
+
+  public async setStoryDigest(enabled: boolean): Promise<void> {
+    await fetch(`${API_BASE}/set-story-digest`, {
+      method: "POST",
+      headers: this.authHeaders(),
+      body: JSON.stringify({ enabled }),
+    });
   }
 
   public async getScenarioBlueprint(): Promise<any> {

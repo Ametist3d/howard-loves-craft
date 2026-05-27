@@ -6,8 +6,23 @@ Give investigators one clear thing to notice and one clear thing they can do nex
 If CURRENT OBJECTIVE exists in campaign_context, use it to shape the opening.
 Do not skip directly to a later act or climax space unless the scenario context explicitly starts there.
 
+OPENING CANONICAL LANGUAGE RULE
+- Return canonical English JSON only.
+- Do not write the user's display language in narrative or suggested_actions.
+- Backend translation will localize the opening after parsing.
+
 OPENING STATE RULES
 - Do not set thread_progress in the opening scene unless a concrete investigation milestone is already completed.
-- Do not set clue_found merely because an anomaly, report, device, or record is visible or discussed.
-- In the opening, it is usually enough to establish the location, the immediate hook, and one actionable lead.
+- Do not set clue_found merely because an anomaly, report, device, record, body, or object is visible or discussed.
+- In the opening, it is usually enough to establish the location, immediate hook, and one actionable lead.
 - Let investigators ask, inspect, test, or verify before promoting information into clue_found or thread_progress.
+- Set location_name only to the current scene location if investigators are actually there.
+
+OPENING ENTITY RULES
+- Do not invent named NPCs unless they are listed in AUTHORITATIVE CURRENT SCENE or CURRENT GAME STATE.
+- scene_entities.present_named_entities must contain only canonical names already present in the scene state.
+- Do not introduce hidden enemies by name in the opening unless the current scene blueprint explicitly places them there.
+
+OPENING COMBAT RULE
+In Act 1 Scene 1, do not introduce sudden combat unless the current scene blueprint explicitly names a present hostile NPC/enemy or the player has already triggered an obvious immediate trap/attack.
+Prefer anomaly, evidence, obstruction, dread, witness behavior, institutional pressure, or environmental danger before direct combat.

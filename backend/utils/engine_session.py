@@ -3,12 +3,13 @@ import os
 import random
 import re
 import asyncio
+from pathlib import Path
 
 from langchain_core.prompts import PromptTemplate
 
 #pylint: disable=import-error
 from utils.db_session import SessionDB, create_session_db_file
-from utils.schemas import CharGenRequest, StartSessionRequest
+from utils.schemas import CharGenRequest, StartSessionRequest, validate_character_response_payload, validate_chat_response_payload
 from utils.helpers import (
     extract_blueprint_json,
     extract_json,
@@ -18,13 +19,11 @@ from utils.helpers import (
 )
 from utils.helper_story import (
     repaired_prompt,
-    local_composed_template,
     _seed_terms,
     _setting_terms,
     _doc_setting_coherence,
     _select_coherent_docs,
     _extract_strict_json_object,
-    _build_deterministic_opening_result,
     _build_blueprint_scaffold,
     _generate_blueprint_header,
     _generate_act_payload,
@@ -41,10 +40,8 @@ from utils.helper_state import (
 from utils.prompt_translate import (
     get_language_name,
     normalize_language_code,
-    ensure_translated_prompts,
-    translate_opening_result_for_user,
-    translate_scenario_summary_for_user,
-    translate_blueprint_for_display,
+    translate_chat_display_payload_for_user,
+    PROMPTS_DIR
 )
 from utils.engine import (
     SESSIONS_DIR,
@@ -57,34 +54,175 @@ from utils.engine import (
     scen_db,
     _image_results,
 )
-from utils.engine_chat import _generate_image_bg
+from utils.engine_chat import _attach_image_generation
 from img_gen.comfy_client import BASE_URL as _COMFY_BASE_URL
+
+# ----------------------------
+# SessionSB interaction helpers
+# ----------------------------
+
+def _ingest_story_graph_from_blueprint(db: SessionDB, blueprint: dict) -> None:
+    if not isinstance(blueprint, dict) or not blueprint:
+        return
+
+    db.clear_story_graph()
+
+    loc_id_map: dict[str, str] = {}
+    npc_id_map: dict[str, str] = {}
+    clue_id_map: dict[str, str] = {}
+    thread_id_map: dict[str, str] = {}
+
+    def ensure_location(name: str, description: str = "", tags: str = "") -> str:
+        name = (name or "").strip() or "Unknown Location"
+        if name in loc_id_map:
+            return loc_id_map[name]
+        lid = db.upsert_location(name=name, description=description, tags=tags)
+        loc_id_map[name] = lid
+        return lid
+
+    def ensure_npc(name: str, role_hint: str = "neutral") -> str:
+        name = (name or "").strip()
+        if not name:
+            name = "Unknown NPC"
+        if name in npc_id_map:
+            return npc_id_map[name]
+
+        kind = "ENEMY" if role_hint in ("enemy", "hidden_enemy") else "NPC"
+        aid = db.upsert_actor(
+            kind=kind,
+            name=name,
+            description=role_hint,
+            hp=12 if kind == "ENEMY" else 10,
+            mp=0,
+            san=0 if kind == "ENEMY" else 50,
+            stats={"str":50,"con":50,"dex":50,"int":50,"pow":50,"app":40,"siz":50,"edu":50},
+            status="ok",
+            notes="INGESTED_FROM_SCENE_GRAPH"
+        )
+        npc_id_map[name] = aid
+        return aid
+
+    def ensure_clue(title: str, content: str = "", location_id: str | None = None) -> str:
+        title = (title or "").strip() or "Clue"
+        if title in clue_id_map:
+            return clue_id_map[title]
+        cid = db.upsert_clue(
+            title=title,
+            content=content,
+            status="hidden",
+            location_id=location_id,
+        )
+        clue_id_map[title] = cid
+        return cid
+
+    def ensure_thread(name: str, stakes: str = "", steps: int = 3) -> str:
+        name = (name or "").strip() or "Story Thread"
+        if name in thread_id_map:
+            return thread_id_map[name]
+        tid = db.upsert_thread(name=name, progress=0, max_progress=max(steps, 1), stakes=stakes)
+        thread_id_map[name] = tid
+        return tid
+
+    # Optional global registries first, but do not rely on them.
+    for loc in [x for x in (blueprint.get("locations") or []) if isinstance(x, dict)]:
+        ensure_location(str(loc.get("name", "") or ""),
+                        tags=", ".join(loc.get("tags", [])) if isinstance(loc.get("tags"), list) else str(loc.get("tags", "") or ""))
+
+    for npc in [x for x in (blueprint.get("npcs") or []) if isinstance(x, dict)]:
+        role = str(npc.get("role", "neutral") or "neutral").lower()
+        aid = ensure_npc(str(npc.get("name", "") or ""), role)
+        # enrich notes if present
+        notes = []
+        if npc.get("secret"): notes.append(f"SECRET: {npc['secret']}")
+        if npc.get("motivation"): notes.append(f"MOTIVATION: {npc['motivation']}")
+        if notes:
+            db.patch_actor(aid, notes="\n".join(notes))
+
+    for th in [x for x in (blueprint.get("plot_threads") or []) if isinstance(x, dict)]:
+        ensure_thread(
+            str(th.get("name", "") or ""),
+            stakes=str(th.get("stakes", "") or ""),
+            steps=int(th.get("steps", 3) or 3),
+        )
+
+    # Exact act -> scene graph
+    for act_idx, act in enumerate([x for x in (blueprint.get("acts") or []) if isinstance(x, dict)], start=1):
+        act_no = int(act.get("act", act_idx) or act_idx)
+        act_title = str(act.get("title", "") or f"Act {act_no}")
+        act_id = db.upsert_story_act(
+            act_no=act_no,
+            title=act_title,
+            summary=str(act.get("summary", "") or ""),
+            purpose=str(act.get("purpose", "") or ""),
+            belief_shift=str(act.get("belief_shift", "") or ""),
+            required_payoffs=[str(x) for x in (act.get("required_payoffs") or []) if x],
+            module_type=str(act.get("module_type", "") or ""),
+            payload=act,
+        )
+
+        thread_id = ensure_thread(
+            act_title,
+            stakes=str(act.get("summary", "") or ""),
+            steps=max(len(act.get("scenes") or []), 1),
+        )
+
+        for scene_idx, scene in enumerate([x for x in (act.get("scenes") or []) if isinstance(x, dict)], start=1):
+            location_name = str(scene.get("location", "") or f"{act_title} Location")
+            location_id = ensure_location(
+                location_name,
+                description=str(scene.get("description", "") or ""),
+                tags=str(scene.get("scene_function", "") or ""),
+            )
+
+            scene_id = db.upsert_story_scene(
+                act_id=act_id,
+                act_no=act_no,
+                scene_no=scene_idx,
+                name=str(scene.get("scene", "") or f"Scene {scene_idx}"),
+                location_id=location_id,
+                payload=scene,
+            )
+
+            db.link_story_scene_thread(scene_id, thread_id)
+
+            for objective_type, key in (
+                ("trigger", "trigger"),
+                ("dramatic_question", "dramatic_question"),
+                ("exit_condition", "exit_condition"),
+            ):
+                text = str(scene.get(key, "") or "").strip()
+                if text:
+                    db.add_story_scene_objective(scene_id, objective_type, text)
+
+            for key in ("npc_present", "npcs_present", "present_npcs", "scene_npcs"):
+                for npc_name in [str(x) for x in (scene.get(key) or []) if x]:
+                    aid = ensure_npc(npc_name)
+                    db.link_story_scene_npc(scene_id, aid)
+
+            scene_reveal_seed = "\n".join([str(x) for x in (scene.get("reveals") or [])[:2] if x]).strip()
+            if not scene_reveal_seed:
+                scene_reveal_seed = str(scene.get("what_happens", "") or "")
+
+            for clue_title in [str(x) for x in (scene.get("clues_available") or []) if x]:
+                cid = ensure_clue(clue_title, content=scene_reveal_seed[:500], location_id=location_id)
+                db.link_story_scene_clue(scene_id, cid)
+
+    first_scene = db.get_current_story_scene()
+    if not first_scene:
+        cur = db.conn.cursor()
+        cur.execute("""
+            SELECT s.* FROM story_scenes s
+            ORDER BY s.act_no, s.scene_no LIMIT 1
+        """)
+        row = cur.fetchone()
+        if row:
+            db.set_current_story_scene(row["id"])
+
+
 
 # ----------------------------
 # Prompt prep / LLM helpers
 # ----------------------------
-
-def _prepare_multicall_prompt_dir(session_id: str, language: str) -> str:
-    # Keep runtime prompts in English for local-model stability.
-    # User-facing localization should happen later in the chat flow, not in start-session.
-    return ensure_translated_prompts(
-        session_id,
-        "en",
-        filenames=(
-            "character_gen.txt",
-            "scenario/scenario_plan.txt",
-            "scenario/scenario_compose.txt",
-            "scenario/scenario_instructions.txt",
-            "keeper/header.txt",
-            "keeper/core_identity.txt",
-            "keeper/output_contract.txt",
-            "keeper/action_adjudication.txt",
-            "keeper/roll_resolution.txt",
-            "keeper/scene_progression.txt",
-            "keeper/opening_scene.txt",
-        ),
-    )
-
 
 def _opening_llm(temperature: float):
     return get_llm(
@@ -123,6 +261,37 @@ def _doc_text_blob(doc) -> str:
 # Generic JSON / structure helpers
 # ----------------------------
 
+def _looks_like_prebuilt_atoms(text: str) -> bool:
+    t = str(text or "")
+    return (
+        "# SOURCE:" in t
+        or "TITLE_EN:" in t
+        or "DISPLAY_NAME:" in t
+        or "TYPE:" in t
+        or "ARCHETYPE:" in t
+    )
+
+
+def _extract_prebuilt_source_name(text: str) -> str:
+    m = re.search(r"^#\s*SOURCE:\s*(.+)$", str(text or ""), re.MULTILINE)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
+def _extract_prebuilt_title_guess(text: str) -> str:
+    t = str(text or "")
+
+    m = re.search(r"^##\s+(.+)$", t, re.MULTILINE)
+    if m:
+        return m.group(1).strip()
+
+    src = _extract_prebuilt_source_name(t)
+    if src:
+        stem = Path(src).stem.replace("_", " ").replace("-", " ")
+        return re.sub(r"\s+", " ", stem).strip()
+
+    return "Prebuilt Scenario"
 
 def _choose_structure_budget(rng: random.Random | None = None) -> tuple[int, int, list[int]]:
     rng = rng or random.Random()
@@ -243,6 +412,102 @@ def _validate_blueprint_structure(
             )
 
     return blueprint
+
+def _normalize_blueprint_registries(blueprint: dict) -> dict:
+    bp = dict(blueprint or {})
+    acts = bp.get("acts") or []
+    if not isinstance(acts, list):
+        return bp
+
+    locations = bp.get("locations")
+    npcs = bp.get("npcs")
+    clues = bp.get("clues")
+    plot_threads = bp.get("plot_threads")
+
+    if not isinstance(locations, list):
+        locations = []
+    if not isinstance(npcs, list):
+        npcs = []
+    if not isinstance(clues, list):
+        clues = []
+    if not isinstance(plot_threads, list):
+        plot_threads = []
+
+    seen_loc = {str(x.get("name", "")).strip().lower() for x in locations if isinstance(x, dict)}
+    seen_npc = {str(x.get("name", "")).strip().lower() for x in npcs if isinstance(x, dict)}
+    seen_clue = {str(x.get("title", "")).strip().lower() for x in clues if isinstance(x, dict)}
+    seen_thread = {str(x.get("name", "")).strip().lower() for x in plot_threads if isinstance(x, dict)}
+
+    for act in acts:
+        scenes = act.get("scenes") or []
+        if not isinstance(scenes, list):
+            continue
+
+        act_title = str(act.get("title", "") or "").strip()
+        if act_title and act_title.lower() not in seen_thread:
+            plot_threads.append({
+                "name": act_title,
+                "stakes": str(act.get("summary", "") or "").strip(),
+                "steps": max(3, len(scenes) or 3),
+            })
+            seen_thread.add(act_title.lower())
+
+        for scene in scenes:
+            if not isinstance(scene, dict):
+                continue
+
+            location = str(scene.get("location", "") or "").strip()
+            description = str(scene.get("description", "") or "").strip()
+            what_happens = str(scene.get("what_happens", "") or "").strip()
+            dramatic_question = str(scene.get("dramatic_question", "") or "").strip()
+            scene_name = str(scene.get("scene", "") or "").strip()
+
+            scene.setdefault("reveals", [])
+            scene.setdefault("conceals", [])
+            scene.setdefault("clues_available", [])
+            scene.setdefault("npc_present", [])
+
+            if location and location.lower() not in seen_loc:
+                locations.append({
+                    "name": location,
+                    "tags": str(scene.get("scene_function", "") or "").strip(),
+                    "hidden": dramatic_question or what_happens[:140],
+                })
+                seen_loc.add(location.lower())
+
+            clue_candidates = []
+
+            if dramatic_question:
+                clue_candidates.append(dramatic_question)
+            if what_happens:
+                clue_candidates.append(what_happens)
+            if description:
+                clue_candidates.append(description)
+
+            for idx, clue_text in enumerate(clue_candidates, start=1):
+                clue_title = f"{scene_name} clue {idx}".strip()
+                if clue_title.lower() in seen_clue:
+                    continue
+
+                clues.append({
+                    "title": clue_title,
+                    "content": clue_text[:220],
+                    "true_meaning": "",
+                    "location": location,
+                })
+                scene["clues_available"].append(clue_title)
+                seen_clue.add(clue_title.lower())
+
+            reveal_text = what_happens or dramatic_question
+            if reveal_text and reveal_text not in scene["reveals"]:
+                scene["reveals"].append(reveal_text)
+
+    bp["acts"] = acts
+    bp["locations"] = locations
+    bp["npcs"] = npcs
+    bp["clues"] = clues
+    bp["plot_threads"] = plot_threads
+    return bp
 
 def _fallback_hook_type(seed: str) -> str:
     s = (seed or "").lower()
@@ -488,6 +753,7 @@ def _run_multi_call_scenario_synth(
 
     plan_chain = PromptTemplate.from_template(plan_template) | get_llm(
         temperature=0.08,
+        task="scenario_plan",
         num_ctx=8192,
         num_predict=1200,
         json_mode=True,
@@ -533,6 +799,7 @@ def _run_multi_call_scenario_synth(
                 PromptTemplate.from_template(local_compose_template)
                 | get_llm(
                     temperature=compose_temp,
+                    task="scenario_compose",
                     num_ctx=int(os.getenv("SCENARIO_SYNTH_NUM_CTX", "16384")),
                     num_predict=compose_num_predict,
                     json_mode=True,
@@ -548,6 +815,7 @@ def _run_multi_call_scenario_synth(
                 PromptTemplate.from_template(local_compose_template)
                 | get_llm(
                     temperature=compose_temp,
+                    task="scenario_compose",
                     num_ctx=int(os.getenv("SCENARIO_SYNTH_NUM_CTX", "16384")),
                     num_predict=compose_num_predict,
                     json_mode=True,
@@ -585,6 +853,7 @@ def _run_multi_call_scenario_synth(
         _trace_session(db, "SCENARIO_COMPOSE_REPAIR_PROMPT", repair_prompt)
         repaired_raw = get_llm(
             temperature=0.05,
+            task="scenario_repair",
             num_ctx=12000,
             num_predict=2400,
             json_mode=True,
@@ -619,16 +888,14 @@ def _run_multi_call_scenario_synth(
 # ----------------------------
 
 async def generate_character_logic(req: CharGenRequest) -> dict:
-    session_id = "local_session"
     lang = normalize_language_code(req.language)
-    prompt_dir = _prepare_multicall_prompt_dir(session_id, lang)
 
     llm = get_llm(
         temperature=0.7,
         task="character_json",
     )
     chain = PromptTemplate.from_template(
-        read_prompt("character_gen.txt", prompt_dir=prompt_dir)
+        read_prompt("character_gen.txt", prompt_dir=PROMPTS_DIR)
     ) | llm
 
     response_text = chain.invoke({
@@ -637,12 +904,172 @@ async def generate_character_logic(req: CharGenRequest) -> dict:
         "prompt": req.prompt,
         "era_context": req.era_context or "1920s Lovecraftian Horror — default if no setting selected",
     })
-    return extract_json(response_text)
+
+    raw = str(response_text or "").strip()
+    raw = re.sub(r"^```[a-zA-Z]*\n", "", raw)
+    raw = re.sub(r"\n```$", "", raw)
+
+    start = raw.find("{")
+    end = raw.rfind("}")
+
+    parsed = {}
+    if start != -1 and end != -1 and end > start:
+        candidate = raw[start:end + 1]
+        try:
+            parsed = json.loads(candidate, strict=False)
+        except Exception as e:
+            logger.warning("Character generation JSON parse failed: %s", e)
+            logger.warning("Character generation raw candidate: %r", candidate[:4000])
+
+    if not isinstance(parsed, dict):
+        parsed = {}
+
+    return validate_character_response_payload(parsed)
 
 
 # ----------------------------
 # Opening scene
 # ----------------------------
+
+def _current_opening_scene_labels(db: SessionDB) -> tuple[str, str]:
+    """
+    Prefer the DB story graph over legacy kv_store keys.
+    """
+    scene = db.get_current_story_scene()
+    if scene:
+        return (
+            str(scene.get("name", "") or "").strip(),
+            str(scene.get("location_name", "") or "").strip(),
+        )
+
+    row_scene = db.conn.execute(
+        "SELECT value FROM kv_store WHERE key='current_scene'"
+    ).fetchone()
+    row_loc = db.conn.execute(
+        "SELECT value FROM kv_store WHERE key='current_scene_location'"
+    ).fetchone()
+
+    return (
+        str(row_scene[0] if row_scene else "" or "").strip(),
+        str(row_loc[0] if row_loc else "" or "").strip(),
+    )
+
+
+def _force_opening_scene_entities_from_db(db: SessionDB, result: dict) -> dict:
+    """
+    Opening scene entities must come from current DB story scene only.
+    Do not trust LLM-invented names.
+    """
+    safe = dict(result or {})
+    scene = db.get_current_story_scene()
+
+    names: list[str] = []
+    if scene:
+        names = [
+            str(npc.get("name", "") or "").strip()
+            for npc in db.list_story_scene_npcs(scene["id"])
+            if str(npc.get("name", "") or "").strip()
+        ]
+
+    llm_entities = ((safe.get("scene_entities") or {}).get("present_named_entities") or [])
+    dropped = [
+        str(name).strip()
+        for name in llm_entities
+        if str(name).strip() and str(name).strip() not in names
+    ]
+    if dropped:
+        logger.warning("OPENING_DROPPED_UNKNOWN_SCENE_ENTITIES: %s", dropped)
+
+    safe["scene_entities"] = {"present_named_entities": names}
+    return safe
+
+
+def _store_display_to_canonical_action_map(db: SessionDB, canonical_result: dict, display_result: dict) -> None:
+    canonical_actions = [
+        str(x).strip()
+        for x in (canonical_result.get("suggested_actions") or [])
+        if str(x).strip()
+    ]
+    display_actions = [
+        str(x).strip()
+        for x in (display_result.get("suggested_actions") or [])
+        if str(x).strip()
+    ]
+
+    action_map = {
+        shown: canonical
+        for shown, canonical in zip(display_actions, canonical_actions)
+        if shown and canonical
+    }
+
+    db.conn.execute(
+        "INSERT OR REPLACE INTO kv_store (key, value) VALUES ('last_suggested_action_map_json', ?)",
+        (json.dumps(action_map, ensure_ascii=False),),
+    )
+    db.conn.commit()
+
+
+def _finalize_opening_result(
+    *,
+    db: SessionDB,
+    session_id: str,
+    result: dict,
+    session_language: str,
+    setting_override: str,
+    era_override: str,
+) -> dict:
+    """
+    Single post-processing path for normal and fallback openings.
+    Uses one batched display-translation call and deterministic image prompt creation.
+    """
+    result = validate_chat_response_payload(result)
+    result = _force_opening_scene_entities_from_db(db, result)
+
+    rr = result.get("roll_request") or {}
+    if rr.get("required"):
+        save_pending_roll(db, rr)
+    else:
+        clear_pending_roll(db)
+
+    apply_state_updates(db, result)
+
+    display_result = translate_chat_display_payload_for_user(result, session_language)
+    _store_display_to_canonical_action_map(db, result, display_result)
+
+    logger.info(
+        "Opening translation | lang=%s | narrative_before=%r | narrative_after=%r | actions_before=%r | actions_after=%r",
+        session_language,
+        result.get("narrative", "")[:180],
+        display_result.get("narrative", "")[:180],
+        (result.get("suggested_actions") or [])[:3],
+        (display_result.get("suggested_actions") or [])[:3],
+    )
+
+    display_result = _attach_image_generation(
+        session_id=session_id,
+        display_result=display_result,
+        canonical_narrative=result.get("narrative", ""),
+        setting=setting_override,
+        era=era_override,
+    )
+
+    db.log_event("SYS_OPENING_SCENE", {"content": "Opening scene generated"})
+    db.log_event("CHAT", {
+        "role": "Keeper",
+        "content": result.get("narrative", ""),
+        "display_content": display_result.get("narrative", ""),
+    })
+
+    cur = db.conn.cursor()
+    row_tc = cur.execute("SELECT value FROM kv_store WHERE key='turn_count'").fetchone()
+    turn_count = int(row_tc[0]) + 1 if row_tc else 1
+    cur.execute(
+        "INSERT OR REPLACE INTO kv_store (key, value) VALUES ('turn_count', ?)",
+        (str(turn_count),),
+    )
+    db.conn.commit()
+
+    return display_result
 
 async def generate_opening_scene_logic(db: SessionDB, session_id: str = "local_session") -> dict:
     
@@ -673,15 +1100,7 @@ async def generate_opening_scene_logic(db: SessionDB, session_id: str = "local_s
     ).fetchone()
     session_language = normalize_language_code(lang_row[0] if lang_row else "en")
 
-    current_scene_row = db.conn.execute(
-    "SELECT value FROM kv_store WHERE key='current_scene'"
-    ).fetchone()
-    current_scene_name = current_scene_row[0] if current_scene_row else ""
-
-    current_scene_loc_row = db.conn.execute(
-        "SELECT value FROM kv_store WHERE key='current_scene_location'"
-    ).fetchone()
-    current_scene_location = current_scene_loc_row[0] if current_scene_loc_row else ""
+    current_scene_name, current_scene_location = _current_opening_scene_labels(db)
 
     prompt_dir_row = db.conn.execute(
         "SELECT value FROM kv_store WHERE key='prompt_dir'"
@@ -714,12 +1133,15 @@ async def generate_opening_scene_logic(db: SessionDB, session_id: str = "local_s
         "history": "",
         "action": (
             "Open the scenario with the first playable scene only.\n"
-            f"CURRENT SCENE NAME (use this scene): {current_scene_name}\n"
+            f"CURRENT SCENE NAME (use this exact scene): {current_scene_name}\n"
             f"CURRENT SCENE LOCATION (reuse this exact location label in state_updates.location_name): {current_scene_location}\n"
             "Do not skip ahead.\n"
             "Do not move to another scene or another location.\n"
+            "Do not invent named NPCs unless they are listed in AUTHORITATIVE CURRENT SCENE / SCENE NPCS.\n"
+            "scene_entities.present_named_entities must contain only names already listed in CURRENT GAME STATE or SCENE NPCS.\n"
             "state_updates.location_name must match the current scene location exactly.\n"
             "Do not require a roll unless immediate uncertainty is already established.\n"
+            "Do not set clue_found or thread_progress in the opening unless investigators already learned actionable content.\n"
             "Provide exactly three actionable suggested actions."
         ),
         "last_turn_ban": "",
@@ -730,61 +1152,39 @@ async def generate_opening_scene_logic(db: SessionDB, session_id: str = "local_s
 
     opening_violations = validate_opening_scene_response(db, result)
     if opening_violations:
-        logger.warning("Opening scene validation failed: %s", opening_violations)
-        db.log_event("OPENING_VALIDATION_FAIL", {
+        logger.warning("Opening scene validation warnings: %s", opening_violations)
+        db.log_event("OPENING_VALIDATION_WARN", {
             "violations": opening_violations,
             "narrative": result.get("narrative", "")[:500],
         })
-        result = build_opening_fallback_result(db)
 
-    display_result = translate_opening_result_for_user(result, session_language)
-    
-    logger.info(
-        "Opening translation | lang=%s | narrative_before=%r | narrative_after=%r | actions_before=%r | actions_after=%r",
-        session_language,
-        result.get("narrative", "")[:180],
-        display_result.get("narrative", "")[:180],
-        (result.get("suggested_actions") or [])[:3],
-        (display_result.get("suggested_actions") or [])[:3],
-    )
+        hard_opening_prefixes = (
+            "opening_missing_narrative",
+            "opening_missing_actions",
+            "opening_hidden_threat",
+            "opening_final_truth",
+        )
 
-    import uuid as _uuid
-    from pathlib import Path as _Path
+        hard_opening = any(
+            v == "opening_missing_narrative"
+            or v == "opening_missing_actions"
+            or v.startswith("opening_hidden_threat")
+            or v.startswith("opening_final_truth")
+            for v in opening_violations
+        )
 
+        if hard_opening:
+            logger.warning("Opening scene hard validation failed, using fallback: %s", opening_violations)
+            result = build_opening_fallback_result(db)
 
-    gen_id = _uuid.uuid4().hex
-    _image_results[gen_id] = "pending"
-    display_result["generation_id"] = gen_id
-    display_result["image_url"] = None
-
-    asyncio.create_task(_generate_image_bg(
-        generation_id=gen_id,
+    return _finalize_opening_result(
+        db=db,
         session_id=session_id,
-        narrative=result.get("narrative", ""),  
-        setting=setting_override,
-        era=era_override,
-    ))
-
-    rr = result.get("roll_request") or {}
-    if rr.get("required"):
-        save_pending_roll(db, rr)
-    else:
-        clear_pending_roll(db)
-
-    db.log_event("SYS_OPENING_SCENE", {"content": "Opening scene generated"})
-    db.log_event("CHAT", {"role": "Keeper", "content": display_result.get("narrative", "")})
-
-    cur.execute("SELECT value FROM kv_store WHERE key='turn_count'")
-    row_tc = cur.fetchone()
-    turn_count = int(row_tc[0]) + 1 if row_tc else 1
-    cur.execute(
-        "INSERT OR REPLACE INTO kv_store (key, value) VALUES ('turn_count', ?)",
-        (str(turn_count),),
+        result=result,
+        session_language=session_language,
+        setting_override=setting_override,
+        era_override=era_override,
     )
-    db.conn.commit()
-
-    apply_state_updates(db, result)
-    return display_result
 
 # ----------------------------
 # Session start
@@ -793,7 +1193,6 @@ async def generate_opening_scene_logic(db: SessionDB, session_id: str = "local_s
 async def start_session_logic(req: StartSessionRequest) -> dict:
     session_id = "local_session"
     lang = normalize_language_code(req.language)
-    prompt_dir = _prepare_multicall_prompt_dir(session_id, lang)
 
     themes_str = ", ".join(req.themes).upper() if req.themes else "STANDARD"
     era_context = req.era_context or "Cosmic Horror — derive era and aesthetics from the scenario atoms."
@@ -802,8 +1201,8 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
         setting_desc = f"Custom: {req.customPrompt[:50]}..."
         query_text = req.customPrompt
     elif req.scenarioType == "prebuilt" and req.picked_seed:
-        setting_desc = f"Prebuilt: {req.picked_seed[:50]}..."
-        query_text = req.picked_seed
+        setting_desc = "Prebuilt scenario"
+        query_text = "Prebuilt Scenario"
         era_context = req.era_context or era_context
     elif req.picked_seed:
         setting_desc = f"Themes: {themes_str}"
@@ -829,7 +1228,7 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
     })
 
     _trace_session_json(db, "SESSION_START_ENV", {
-        "prompt_dir": prompt_dir,
+        "prompt_dir": PROMPTS_DIR,
         "ollama_model": os.getenv("OLLAMA_MODEL", "gemma3:27b"),
         "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         "scenario_synth_num_ctx": os.getenv("SCENARIO_SYNTH_NUM_CTX", "16384"),
@@ -860,50 +1259,57 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
         )
         for skill in inv.get("skills", []):
             db.set_skill(aid, skill["name"], skill["value"])
+        for item in inv.get("inventory", []):
+            db.add_actor_item(aid, str(item))
         db.log_event("SYS_INIT", {"note": f"Character {inv.get('name')} registered."})
 
     scenario_atoms_text = ""
     blueprint: dict = {}
 
     if req.scenarioType == "prebuilt" and req.picked_seed:
-        logger.info("Prebuilt scenario selected — extracting blueprint from source content.")
-        scenario_source_text = req.picked_seed
-        extract_prompt = (
-            "You are a Call of Cthulhu scenario analyst. "
-            "Below is the full text of a published scenario. "
-            "Extract its structure into JSON. Do NOT invent anything — only use what is in the text.\n\n"
-            "SCENARIO TEXT:\n"
-            f"{scenario_source_text[:6000]}\n\n"
-            "Return ONLY a JSON object with these keys:\n"
-            "  title (str), era_and_setting (str), inciting_hook (str), core_mystery (str),\n"
-            "  key_npc (str), hidden_threat (str), atmosphere_notes (str),\n"
-            "  plot_twists (list[str]),\n"
-            "  locations (list of {name, description, tags}),\n"
-            "  npcs (list of {name, description, role, secret}),\n"
-            "  clues (list of {title, content, location}),\n"
-            "  plot_threads (list of {name, stakes, steps})\n"
-            "JSON:"
-        )
-        try:
-            extract_raw = get_llm(
-                temperature=0.1,
-                task="scenario_json",
-            ).invoke(extract_prompt)
-            _dbg("EXTRACT PROMPT", extract_prompt[:2000])
-            _dbg("EXTRACT RAW RESPONSE", str(extract_raw))
-            blueprint = extract_blueprint_json(extract_raw)
-            scenario_atoms_text = (
-                f"SCENARIO TITLE: {blueprint.get('title', 'Unknown')}\n"
-                f"SETTING: {blueprint.get('era_and_setting', '')}\n"
-                f"HOOK: {blueprint.get('inciting_hook', '')}\n"
-                f"KEY NPC: {blueprint.get('key_npc', '')}\n"
-                f"ATMOSPHERE: {blueprint.get('atmosphere_notes', '')}"
+        prebuilt_payload = str(req.picked_seed or "").strip()
+
+        if _looks_like_prebuilt_atoms(prebuilt_payload):
+            logger.info("Prebuilt scenario selected — synthesizing blueprint from stored scenario atoms.")
+
+            source_name = _extract_prebuilt_source_name(prebuilt_payload)
+            title_guess = _extract_prebuilt_title_guess(prebuilt_payload)
+
+            # Keep prebuilt sessions anchored to the supplied scenario atoms.
+            query_text = title_guess or source_name or "Prebuilt Scenario"
+            era_context = req.era_context or (
+                "Derive era and setting strictly from the prebuilt scenario atoms. "
+                "Do not invent or substitute a different era."
             )
-            logger.info("Prebuilt blueprint extracted: %s", blueprint.get("title", "?"))
-        except Exception as e:
-            logger.warning("Prebuilt extraction failed (%s), using raw scenario text.", e)
+
+            raw_atoms_text = prebuilt_payload
+
+            try:
+                blueprint, scenario_atoms_text = _run_multi_call_scenario_synth(
+                    db=db,
+                    prompt_dir=PROMPTS_DIR,
+                    themes_str=themes_str,
+                    era_context=era_context,
+                    lang=lang,
+                    query_text=query_text,
+                    raw_atoms_text=raw_atoms_text,
+                )
+                logger.info("Prebuilt blueprint synthesized from atoms: %s", blueprint.get("title", "?"))
+            except Exception as e:
+                logger.warning("Prebuilt atom synthesis failed (%s), using raw prebuilt atoms.", e)
+                blueprint = {}
+                scenario_atoms_text = raw_atoms_text[:4000]
+                _trace_session(db, "PREBUILT_SYNTH_EXCEPTION", repr(e))
+                _trace_session(db, "PREBUILT_SYNTH_FALLBACK_ATOMS", scenario_atoms_text)
+
+        else:
+            logger.info("Prebuilt scenario selected — payload looks like raw scenario text, using it as atoms fallback.")
             blueprint = {}
-            scenario_atoms_text = scenario_source_text[:4000]
+            scenario_atoms_text = prebuilt_payload[:4000]
+            era_context = req.era_context or (
+                "Derive era and setting strictly from the prebuilt scenario text. "
+                "Do not invent or substitute a different era."
+            )
 
     elif scen_db:
         logger.info("Querying Scenario DB for starting atoms using: %r", query_text)
@@ -1061,7 +1467,7 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
         try:
             blueprint, scenario_atoms_text = _run_multi_call_scenario_synth(
                 db=db,
-                prompt_dir=prompt_dir,
+                prompt_dir=PROMPTS_DIR,
                 themes_str=themes_str,
                 era_context=era_context,
                 lang=lang,
@@ -1104,115 +1510,51 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
         "query": query_text if req.scenarioType != "prebuilt" else blueprint.get("title", "prebuilt")
     })
 
+
     if isinstance(blueprint, dict) and blueprint:
-        loc_id_map: dict[str, str] = {}
+        _ingest_story_graph_from_blueprint(db, blueprint)
+    
+    cur = db.conn.cursor()
+    first_scene = db.get_current_story_scene()
+    if first_scene:
+        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('current_act', ?)", (str(first_scene["act_no"]),))
+        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('current_scene', ?)", (str(first_scene["name"]),))
+        cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('current_scene_location', ?)", (str(first_scene.get("location_name", "") or ""),))
 
-    for loc in _dict_items_only(blueprint.get("locations", [])):
-        loc_name = str(loc.get("name", "Unknown") or "Unknown")
-        tags_raw = loc.get("tags", "")
-        tags_str = ", ".join(tags_raw) if isinstance(tags_raw, list) else str(tags_raw or "")
-        lid = db.upsert_location(name=loc_name, description="", tags=tags_str)
-        loc_id_map[loc_name] = lid
-
-    for npc in _dict_items_only(blueprint.get("npcs", [])):
-        role = str(npc.get("role", "neutral") or "neutral").lower()
-        kind = "ENEMY" if role in ("enemy", "hidden_enemy") else "NPC"
-        npc_name = str(npc.get("name", "Unknown") or "Unknown")
-        npc_secret = str(npc.get("secret", "") or "")
-        npc_motivation = str(npc.get("motivation", "") or "")
-        notes_parts = []
-        if npc_secret:
-            notes_parts.append(f"SECRET: {npc_secret}")
-        if npc_motivation:
-            notes_parts.append(f"MOTIVATION: {npc_motivation}")
-
-        aid = db.upsert_actor(
-            kind=kind,
-            name=npc_name,
-            description=role,
-            hp=10 if kind == "NPC" else 12,
-            mp=0,
-            san=50 if kind == "NPC" else 0,
-            stats={
-                "str": 50,
-                "con": 50,
-                "dex": 50,
-                "int": 50,
-                "pow": 50,
-                "app": 40,
-                "siz": 50,
-                "edu": 50,
-            },
-            notes="\n".join(notes_parts).strip(),
-        )
-        db.set_skill(aid, "Dodge", 25)
-        db.set_skill(aid, "Fighting (Brawl)", 25 if kind == "NPC" else 40)
-        if kind == "ENEMY":
-            db.set_skill(aid, "Firearms (Handgun)", 20)
-
-    for clue in _dict_items_only(blueprint.get("clues", [])):
-        loc_name = str(clue.get("location", "") or "")
-        surface = str(clue.get("content", "") or "")
-        deeper = str(clue.get("true_meaning", "") or "")
-        stored_content = surface
-        if deeper:
-            stored_content = f"{surface}\nTRUE_MEANING: {deeper}" if surface else f"TRUE_MEANING: {deeper}"
-        db.upsert_clue(
-            title=str(clue.get("title", "Clue") or "Clue"),
-            content=stored_content,
-            status="hidden",
-            location_id=loc_id_map.get(loc_name),
-        )
-
-    for thread in _dict_items_only(blueprint.get("plot_threads", [])):
-        steps_raw = thread.get("steps", 4)
-        steps = int(steps_raw) if isinstance(steps_raw, (int, float, str)) else 4
-        db.upsert_thread(
-            name=str(thread.get("name", "Thread") or "Thread"),
-            stakes=str(thread.get("stakes", "") or ""),
-            max_progress=steps,
-        )
-
-    scenario_setting = str(blueprint.get("era_and_setting") or era_context if isinstance(blueprint, dict) else era_context)
+    scenario_setting = str(
+        blueprint.get("era_and_setting") or era_context
+        if isinstance(blueprint, dict) else era_context
+    )
 
     first_act_no = 1
     first_scene_name = ""
     first_scene_location = ""
-    if isinstance(blueprint, dict):
-        acts = blueprint.get("acts") or []
-        if acts:
-            first_act = acts[0]
-            first_act_no = int(first_act.get("act", 1) or 1)
-            scenes = first_act.get("scenes") or []
-            if scenes:
-                first_scene_name = str(scenes[0].get("scene", "") or "")
-                first_scene_location = str(scenes[0].get("location", "") or "")
 
-    current_objective = _derive_initial_objective(
+    first_scene = db.get_current_story_scene()
+    if first_scene and first_scene.get("location_id"):
+        for pc in db.list_actors("PC"):
+            db.patch_actor(actor_id=pc["id"], location_id=first_scene["location_id"])
+            
+    if first_scene:
+        first_act_no = int(first_scene["act_no"])
+        first_scene_name = str(first_scene["name"] or "")
+        first_scene_location = str(first_scene.get("location_name", "") or "")
+
+    scene_objective = ""
+    if first_scene:
+        scene_objective = db.get_story_scene_primary_objective(first_scene["id"])
+
+    current_objective = scene_objective or _derive_initial_objective(
         blueprint if isinstance(blueprint, dict) else {},
         scenario_atoms_text,
         str(era_context),
     )
 
     # Keep canonical scenario data in English.
+    # Do not translate large scenario summaries/blueprints during session start;
+    # it is expensive and not needed for runtime play.
     scenario_atoms_display = scenario_atoms_text
     blueprint_display = blueprint if isinstance(blueprint, dict) else {}
-
-    if lang != "en":
-        try:
-            scenario_atoms_display = translate_scenario_summary_for_user(
-                scenario_atoms_text,
-                lang,
-            )
-        except Exception as e:
-            logger.warning("Scenario summary translation failed (%s); using English summary.", e)
-
-        try:
-            if isinstance(blueprint, dict) and blueprint:
-                blueprint_display = translate_blueprint_for_display(blueprint, lang)
-        except Exception as e:
-            logger.warning("Blueprint display translation failed (%s); using English blueprint.", e)
-            blueprint_display = blueprint if isinstance(blueprint, dict) else {}
 
     _trace_session_json(db, "SCENARIO_FINAL_STATE", {
         "scenario_atoms_text": scenario_atoms_text[:6000],
@@ -1225,14 +1567,18 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
         "blueprint_preview": json.dumps(blueprint, ensure_ascii=False)[:6000],
     })
 
-    cur = db.conn.cursor()
+    # if isinstance(blueprint, dict) and blueprint:
+    #     blueprint = _normalize_blueprint_registries(blueprint)
+
+  
     cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_atoms', ?)", (str(scenario_atoms_text),))
     cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_themes', ?)", (str(themes_str),))
     cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_setting', ?)", (scenario_setting,))
     cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('era_context', ?)", (str(era_context),))
     cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_source', ?)", (str(req.picked_seed[:100]) if req.picked_seed else "",))
     cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('language', ?)", (lang,))
-    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('prompt_dir', ?)", (prompt_dir,))
+    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('prompt_dir', ?)", (str(PROMPTS_DIR),))
+
     cur.execute(
         "INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_blueprint_json', ?)",
         (json.dumps(blueprint, ensure_ascii=False) if isinstance(blueprint, dict) else "{}",),
@@ -1245,9 +1591,9 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
         "INSERT OR REPLACE INTO kv_store (key, value) VALUES ('scenario_blueprint_display_json', ?)",
         (json.dumps(blueprint_display, ensure_ascii=False) if isinstance(blueprint_display, dict) else "{}",),
     )
-    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('current_act', ?)", (str(first_act_no),))
-    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('current_scene', ?)", (first_scene_name,))
-    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('current_scene_location', ?)", (first_scene_location,))
+    # cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('current_act', ?)", (str(first_act_no),))
+    # cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('current_scene', ?)", (first_scene_name,))
+    # cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('current_scene_location', ?)", (first_scene_location,))
     cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('current_objective', ?)", (current_objective,))
     db.conn.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)", ("scenario_era", str(era_context)))
     db.conn.commit()
@@ -1258,8 +1604,13 @@ async def start_session_logic(req: StartSessionRequest) -> dict:
 
     if not isinstance(blueprint, dict) or not blueprint:
         result = build_opening_fallback_result(db)
-        display_result = translate_opening_result_for_user(result, lang)
-        apply_state_updates(db, result)
-        return display_result
+        return _finalize_opening_result(
+            db=db,
+            session_id=session_id,
+            result=result,
+            session_language=lang,
+            setting_override=scenario_setting,
+            era_override=str(era_context),
+        )
 
     return await generate_opening_scene_logic(db, session_id=session_id)
